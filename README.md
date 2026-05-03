@@ -151,7 +151,9 @@ The Settings page has tabs for Agents, Providers, Models, Intelligence, Security
 
 ## Web chat attachments
 
-The web chat at `http://127.0.0.1:18789/chat` accepts files three ways: click the **+** button next to **Send**, drag and drop onto the chat window, or paste an image from the clipboard. Up to **20 attachments per message**, with chips above the textarea showing each file's name, size, and a thumbnail (images) or kind badge (PDF / DOC / TXT). Click the × on any chip to remove it before sending; the input area highlights green during a drag.
+The web chat at `http://127.0.0.1:18789/chat` accepts files three ways: click the **+** button at the left edge of the input bar, drag and drop anywhere on the chat window, or paste a file or image from the clipboard. Up to **20 attachments per message**, with chips above the textarea showing each file's name, size, and either a thumbnail (decodable images) or a kind badge (**PDF** / **DOC** / **TXT** / **IMG**). Click the × on any chip to remove it before sending; the input area highlights green during a drag.
+
+Image bytes that can't be decoded (corrupted upload, wrong MIME on a binary file) gracefully fall back to the **IMG** badge in the chip and a labelled pill in the user-message bubble — no broken-image icons. Attachments themselves are *not* persisted in session history (the on-disk format intentionally omits inline binary data), so reloading a past session shows the conversation text but not the inline thumbnails — re-attach if you want the images visible again in the bubble.
 
 ### Supported file types
 
@@ -159,8 +161,8 @@ The web chat at `http://127.0.0.1:18789/chat` accepts files three ways: click th
 |------|----------|-----------------|--------------|
 | **Images** | `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp` | Sent as native vision input to the model — same path as the CLI's image-attachment flow. | 10 MiB |
 | **PDFs** | `.pdf` | Extracted to plain text server-side via `pdftotext -layout -enc UTF-8` and inlined into the user message as a fenced block. | 25 MiB input, 256 KiB extracted |
-| **Word docs** | `.docx` | Extracted via `pandoc -f docx -t plain` and inlined as a fenced block. | 25 MiB input, 256 KiB extracted |
-| **Plain text & code** | `.txt`, `.md`, `.csv`, `.json`, `.yaml`, `.toml`, `.xml`, `.html`, `.css`, `.js`, `.ts`, `.go`, `.py`, `.rb`, `.rs`, `.sql`, `.sh`, `.log`, plus any `text/*` MIME | UTF-8 decoded directly; UTF-8/UTF-16 BOM stripped or transcoded; legacy encodings (Latin-1, GBK, Shift-JIS) rejected with a "save as UTF-8" hint. | 25 MiB input, 256 KiB extracted |
+| **Word docs** | `.docx` | Extracted via `pandoc -f docx -t plain --wrap=none` and inlined as a fenced block. | 25 MiB input, 256 KiB extracted |
+| **Plain text & code** | `.txt`, `.md`, `.markdown`, `.csv`, `.json`, `.yaml`, `.yml`, `.toml`, `.xml`, `.html`, `.htm`, `.css`, `.js`, `.mjs`, `.ts`, `.tsx`, `.go`, `.py`, `.rb`, `.rs`, `.sql`, `.sh`, `.bash`, `.tex`, `.log`, plus any `text/*` MIME | UTF-8 decoded directly; UTF-8/UTF-16 BOM stripped or transcoded; BOM-less UTF-16 detected via byte-parity heuristic; legacy single-byte encodings (Latin-1, GBK, Shift-JIS) rejected with a "save as UTF-8" hint. | 25 MiB input, 256 KiB extracted |
 
 PDFs and Word docs need the matching binary on `$PATH` — `brew install poppler` for `pdftotext`, `brew install pandoc` for DOCX (or `apt install poppler-utils pandoc` on Debian/Ubuntu). If a binary is missing, the chat surfaces a one-line error like `pdftotext not found on PATH (install poppler …)` instead of swallowing the upload.
 
@@ -184,7 +186,7 @@ The 256 KiB output cap per attachment keeps the prompt finite even on hostile in
 
 ### Multilingual input
 
-The textarea sets `dir="auto"`, so Arabic, Hebrew, and mixed-script messages render with the correct per-paragraph direction without manual toggling. Enter sends the message except while an IME is composing — CJK, Vietnamese, and Korean candidates commit normally without triggering an early send. Attached text files decode with BOM detection (UTF-8 BOM stripped; UTF-16 LE/BE with or without BOM transcoded to UTF-8); legacy single-byte encodings are rejected with a clear hint rather than silently mangled.
+The textarea sets `dir="auto"`, which the browser resolves per-paragraph from the first strong-directional character in each line — so Arabic and Hebrew lines flow right-to-left, English lines stay left-to-right, and a mixed-script message gets each paragraph oriented correctly without any user toggling. Enter sends the message *except* while an IME is composing — the handler tracks `compositionstart` / `compositionend` and skips the send when `KeyboardEvent.isComposing` (or the legacy `keyCode === 229`) is true, so CJK, Vietnamese, and Korean candidate-commit Enter no longer fires the message prematurely. Attached text files decode with BOM detection (UTF-8 BOM stripped; UTF-16 LE/BE with or without BOM transcoded to UTF-8 via `golang.org/x/text/encoding/unicode`); legacy single-byte encodings are rejected with a clear hint rather than silently mangled.
 
 ### Pure-attachment messages
 
