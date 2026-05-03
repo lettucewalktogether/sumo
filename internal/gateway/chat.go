@@ -624,13 +624,18 @@ html.light #header .logo {
 	color: var(--text-em);
 	border: 1px solid var(--border);
 	border-radius: 8px;
-	padding: 0 0.7rem;
-	font-size: 1.1rem;
+	width: 40px;
+	height: 40px;
+	padding: 0;
+	font-size: 1.4rem;
+	font-weight: 400;
+	line-height: 1;
 	cursor: pointer;
 	transition: background 0.2s, border-color 0.2s, color 0.2s;
 	align-self: flex-end;
-	height: 40px;
-	line-height: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 #attach-btn:hover { border-color: var(--accent); color: var(--accent); }
 #attach-btn:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -688,7 +693,7 @@ html.light #header .logo {
 	<div id="attachment-strip" aria-label="Attached files"></div>
 	<div id="input-area">
 		<textarea id="input" rows="1" placeholder="Type a message or drop an image..." autofocus></textarea>
-		<button id="attach-btn" type="button" title="Attach image (jpg, png, gif, webp, bmp · max 10 MB)" aria-label="Attach image">&#128206;</button>
+		<button id="attach-btn" type="button" title="Attach image (jpg, png, gif, webp, bmp · max 10 MB)" aria-label="Attach image">+</button>
 		<input id="file-picker" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/bmp" multiple style="display:none">
 		<button id="send-btn" disabled>Send</button>
 		<button id="stop-btn">Stop</button>
