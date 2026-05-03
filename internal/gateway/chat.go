@@ -720,9 +720,9 @@ html.light #header .logo {
 	<div id="attach-error" aria-live="polite"></div>
 	<div id="attachment-strip" aria-label="Attached files"></div>
 	<div id="input-area">
-		<textarea id="input" rows="1" placeholder="Type a message or drop a file..." dir="auto" lang="" autocapitalize="off" autocorrect="off" spellcheck="true" autofocus></textarea>
 		<button id="attach-btn" type="button" title="Attach an image, document, or text file" aria-label="Attach file">+</button>
 		<input id="file-picker" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/bmp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/*,application/json,application/xml,application/x-yaml,application/yaml,application/javascript,application/x-sh,.md,.txt,.csv,.json,.yaml,.yml,.xml,.html,.css,.js,.ts,.go,.py,.rb,.rs,.toml,.sql,.sh,.log" multiple style="display:none">
+		<textarea id="input" rows="1" placeholder="Type a message or drop a file..." dir="auto" lang="" autocapitalize="off" autocorrect="off" spellcheck="true" autofocus></textarea>
 		<button id="send-btn" disabled>Send</button>
 		<button id="stop-btn">Stop</button>
 	</div>
@@ -1577,6 +1577,17 @@ html.light #header .logo {
 					img.src = a.objectUrl ||
 						('data:' + a.mimeType + ';base64,' + a.dataB64);
 					img.alt = a.name || 'attachment';
+					// Same broken-image fallback as the chip strip — if
+					// the bytes can't be decoded, render a labelled pill
+					// instead of leaving the browser's broken icon.
+					img.addEventListener('error', function() {
+						var pill = document.createElement('span');
+						pill.className = 'user-attachment-pill';
+						pill.dataset.kind = 'image';
+						pill.textContent = a.name || 'image';
+						pill.title = a.mimeType + ' · could not render preview';
+						img.replaceWith(pill);
+					});
 					strip.appendChild(img);
 				} else {
 					// Doc/text attachment — render as a non-removable mini chip
@@ -2046,6 +2057,18 @@ html.light #header .logo {
 					thumb.className = 'attachment-thumb';
 					thumb.src = a.objectUrl;
 					thumb.alt = '';
+					// If the bytes turn out to be unreadable as an image
+					// (corrupted upload, wrong MIME on a binary file),
+					// degrade gracefully to a generic IMG badge instead
+					// of leaving the browser's broken-image glyph in
+					// place.
+					thumb.addEventListener('error', function() {
+						var glyph = document.createElement('span');
+						glyph.className = 'attachment-glyph';
+						glyph.dataset.kind = 'image';
+						glyph.textContent = 'IMG';
+						thumb.replaceWith(glyph);
+					});
 					chip.appendChild(thumb);
 				} else {
 					// Generic file glyph — a small badge rather than a
