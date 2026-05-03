@@ -592,6 +592,23 @@ html.light #header .logo {
 	flex-shrink: 0;
 	background: var(--bg);
 }
+.attachment-glyph {
+	width: 32px; height: 32px;
+	border-radius: 4px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 0.6rem;
+	font-weight: 700;
+	letter-spacing: 0.03em;
+	flex-shrink: 0;
+	background: var(--bg);
+	color: var(--accent2);
+	border: 1px solid var(--border);
+	text-transform: uppercase;
+}
+.attachment-glyph[data-kind="doc"]  { color: var(--accent); }
+.attachment-glyph[data-kind="text"] { color: var(--text-em); }
 .attachment-name {
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -652,6 +669,17 @@ html.light #header .logo {
 	border: 1px solid var(--border);
 	display: block;
 }
+.user-attachment-pill {
+	display: inline-block;
+	padding: 0.2rem 0.55rem;
+	border-radius: 999px;
+	background: var(--bg-input);
+	border: 1px solid var(--border);
+	font-size: 0.75rem;
+	color: var(--text-em);
+}
+.user-attachment-pill[data-kind="doc"]  { color: var(--accent); }
+.user-attachment-pill[data-kind="text"] { color: var(--text-em); }
 #attach-error {
 	color: var(--error);
 	font-size: 0.75rem;
@@ -692,9 +720,9 @@ html.light #header .logo {
 	<div id="attach-error" aria-live="polite"></div>
 	<div id="attachment-strip" aria-label="Attached files"></div>
 	<div id="input-area">
-		<textarea id="input" rows="1" placeholder="Type a message or drop an image..." autofocus></textarea>
-		<button id="attach-btn" type="button" title="Attach image (jpg, png, gif, webp, bmp · max 10 MB)" aria-label="Attach image">+</button>
-		<input id="file-picker" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/bmp" multiple style="display:none">
+		<textarea id="input" rows="1" placeholder="Type a message or drop a file..." dir="auto" lang="" autocapitalize="off" autocorrect="off" spellcheck="true" autofocus></textarea>
+		<button id="attach-btn" type="button" title="Attach an image, document, or text file" aria-label="Attach file">+</button>
+		<input id="file-picker" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/bmp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/*,application/json,application/xml,application/x-yaml,application/yaml,application/javascript,application/x-sh,.md,.txt,.csv,.json,.yaml,.yml,.xml,.html,.css,.js,.ts,.go,.py,.rb,.rs,.toml,.sql,.sh,.log" multiple style="display:none">
 		<button id="send-btn" disabled>Send</button>
 		<button id="stop-btn">Stop</button>
 	</div>
@@ -723,14 +751,72 @@ html.light #header .logo {
 	var attachErrorEl = document.getElementById('attach-error');
 
 	// Attachment limits — must match decodeChatAttachments in websocket.go.
-	var MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+	var MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+	var MAX_DOC_BYTES = 25 * 1024 * 1024;
 	var MAX_ATTACHMENT_COUNT = 20;
-	var ALLOWED_ATTACHMENT_MIMES = {
+	var ALLOWED_IMAGE_MIMES = {
 		'image/jpeg': true, 'image/png': true, 'image/gif': true,
 		'image/webp': true, 'image/bmp': true
 	};
+	// MIMEs the server will UTF-8 decode directly. Anything matching
+	// the text/ prefix is also accepted, alongside this set.
+	var ALLOWED_TEXT_MIMES = {
+		'application/json': true, 'application/xml': true,
+		'application/x-yaml': true, 'application/yaml': true,
+		'application/javascript': true, 'application/x-javascript': true,
+		'application/x-typescript': true, 'application/typescript': true,
+		'application/x-python': true, 'application/x-shellscript': true,
+		'application/x-sh': true, 'application/x-ruby': true,
+		'application/x-go': true, 'application/x-rust': true,
+		'application/x-toml': true, 'application/toml': true,
+		'application/sql': true, 'application/x-sql': true,
+		'application/x-tex': true
+	};
+	// MIMEs the server extracts via shell tools (pdftotext, pandoc).
+	var ALLOWED_DOC_MIMES = {
+		'application/pdf': true,
+		'application/vnd.openxmlformats-officedocument.wordprocessingml.document': true
+	};
+	// Browsers leave .md / unusual extensions with empty type. Map a
+	// few common text-ish extensions to a canonical MIME so the server
+	// allowlist (and the chip kind classifier) accept them.
+	var EXT_MIME_FALLBACK = {
+		md: 'text/markdown', markdown: 'text/markdown',
+		txt: 'text/plain', log: 'text/plain',
+		csv: 'text/csv',
+		yaml: 'application/x-yaml', yml: 'application/x-yaml',
+		toml: 'application/toml',
+		json: 'application/json',
+		xml: 'application/xml',
+		html: 'text/html', htm: 'text/html', css: 'text/css',
+		js: 'application/javascript', mjs: 'application/javascript',
+		ts: 'application/x-typescript', tsx: 'application/x-typescript',
+		py: 'application/x-python',
+		sh: 'application/x-sh', bash: 'application/x-sh',
+		rb: 'application/x-ruby', go: 'application/x-go',
+		rs: 'application/x-rust', sql: 'application/sql',
+		tex: 'application/x-tex'
+	};
+	function detectMime(file) {
+		var t = (file.type || '').toLowerCase();
+		if (t) return t;
+		var name = (file.name || '').toLowerCase();
+		var dot = name.lastIndexOf('.');
+		if (dot < 0) return '';
+		return EXT_MIME_FALLBACK[name.slice(dot + 1)] || '';
+	}
+	function isImageMime(m)    { return ALLOWED_IMAGE_MIMES[m] === true; }
+	function isPlainTextMime(m){ return m.indexOf('text/') === 0 || ALLOWED_TEXT_MIMES[m] === true; }
+	function isDocMime(m)      { return ALLOWED_DOC_MIMES[m] === true; }
+	function isAllowedMime(m)  { return isImageMime(m) || isPlainTextMime(m) || isDocMime(m); }
+	function attachmentKind(m) {
+		if (isImageMime(m)) return 'image';
+		if (isDocMime(m)) return 'doc';
+		if (isPlainTextMime(m)) return 'text';
+		return 'other';
+	}
 	// Pending attachments for the next chat.send.
-	// Each entry: { name, mimeType, sizeBytes, dataB64, objectUrl }.
+	// Each entry: { name, mimeType, kind, sizeBytes, dataB64, objectUrl? }.
 	var attachments = [];
 	var attachErrorTimer = null;
 
@@ -1482,14 +1568,27 @@ html.light #header .logo {
 			var strip = document.createElement('div');
 			strip.className = 'user-attachments';
 			for (var i = 0; i < atts.length; i++) {
-				var img = document.createElement('img');
-				// Prefer the live object URL (cheap, no re-encoding); fall
-				// back to a data: URL so historical replays still render
-				// even after the originating object URL is revoked.
-				img.src = atts[i].objectUrl ||
-					('data:' + atts[i].mimeType + ';base64,' + atts[i].dataB64);
-				img.alt = atts[i].name || 'attachment';
-				strip.appendChild(img);
+				var a = atts[i];
+				if (a.kind === 'image') {
+					var img = document.createElement('img');
+					// Prefer the live object URL (cheap, no re-encoding); fall
+					// back to a data: URL so historical replays still render
+					// even after the originating object URL is revoked.
+					img.src = a.objectUrl ||
+						('data:' + a.mimeType + ';base64,' + a.dataB64);
+					img.alt = a.name || 'attachment';
+					strip.appendChild(img);
+				} else {
+					// Doc/text attachment — render as a non-removable mini chip
+					// so the user sees what was attached without re-encoding
+					// arbitrary bytes for inline display.
+					var pill = document.createElement('span');
+					pill.className = 'user-attachment-pill';
+					pill.dataset.kind = a.kind || 'other';
+					pill.textContent = a.name || 'attachment';
+					pill.title = a.mimeType + ' · ' + formatBytes(a.sizeBytes);
+					strip.appendChild(pill);
+				}
 			}
 			div.appendChild(strip);
 		}
@@ -1867,11 +1966,27 @@ html.light #header .logo {
 		}));
 	});
 
+	// IME-aware Enter handling. While an Input Method Editor is composing
+	// a candidate (CJK/Vietnamese/Korean and similar), pressing Enter
+	// commits the candidate — it must not also send the message. We
+	// guard via two signals: the spec-level KeyboardEvent.isComposing,
+	// and a compositionstart/compositionend tracked flag for the
+	// browsers that don't set isComposing reliably (notably WebKit on
+	// some macOS versions). keyCode 229 is the legacy IME pre-edit
+	// fallback for the same case.
+	var imeComposing = false;
+	inputEl.addEventListener('compositionstart', function() { imeComposing = true; });
+	inputEl.addEventListener('compositionend', function() {
+		// Defer the unset by one frame so the Enter that committed the
+		// candidate is observed as "still composing" by the keydown
+		// listener below.
+		setTimeout(function() { imeComposing = false; }, 0);
+	});
 	inputEl.addEventListener('keydown', function(e) {
-		if (e.key === 'Enter' && !e.shiftKey) {
-			e.preventDefault();
-			sendMessage();
-		}
+		if (e.key !== 'Enter' || e.shiftKey) return;
+		if (e.isComposing || e.keyCode === 229 || imeComposing) return;
+		e.preventDefault();
+		sendMessage();
 	});
 
 	// Auto-resize textarea
@@ -1924,12 +2039,32 @@ html.light #header .logo {
 				chip.className = 'attachment-chip';
 				chip.title = a.name + ' · ' + formatBytes(a.sizeBytes);
 				chip.dataset.mime = a.mimeType;
+				chip.dataset.kind = a.kind || 'other';
 
-				var thumb = document.createElement('img');
-				thumb.className = 'attachment-thumb';
-				thumb.src = a.objectUrl;
-				thumb.alt = '';
-				chip.appendChild(thumb);
+				if (a.kind === 'image' && a.objectUrl) {
+					var thumb = document.createElement('img');
+					thumb.className = 'attachment-thumb';
+					thumb.src = a.objectUrl;
+					thumb.alt = '';
+					chip.appendChild(thumb);
+				} else {
+					// Generic file glyph — a small badge rather than a
+					// raster thumbnail. Carries the kind so CSS can tint
+					// per type (PDF / text / etc.).
+					var glyph = document.createElement('span');
+					glyph.className = 'attachment-glyph';
+					glyph.dataset.kind = a.kind || 'other';
+					var label;
+					if (a.kind === 'doc') {
+						label = a.mimeType === 'application/pdf' ? 'PDF' : 'DOC';
+					} else if (a.kind === 'text') {
+						label = 'TXT';
+					} else {
+						label = 'FILE';
+					}
+					glyph.textContent = label;
+					chip.appendChild(glyph);
+				}
 
 				var name = document.createElement('span');
 				name.className = 'attachment-name';
@@ -1972,13 +2107,15 @@ html.light #header .logo {
 				rejections.push('attachment limit (' + MAX_ATTACHMENT_COUNT + ') reached');
 				break;
 			}
-			var mime = (f.type || '').toLowerCase();
-			if (!ALLOWED_ATTACHMENT_MIMES[mime]) {
+			var mime = detectMime(f);
+			if (!isAllowedMime(mime)) {
 				rejections.push((f.name || 'file') + ': unsupported type (' + (f.type || 'unknown') + ')');
 				continue;
 			}
-			if (f.size > MAX_ATTACHMENT_BYTES) {
-				rejections.push((f.name || 'file') + ': too large (' + formatBytes(f.size) + ' > 10 MB)');
+			var kind = attachmentKind(mime);
+			var cap = (kind === 'image') ? MAX_IMAGE_BYTES : MAX_DOC_BYTES;
+			if (f.size > cap) {
+				rejections.push((f.name || 'file') + ': too large (' + formatBytes(f.size) + ' > ' + formatBytes(cap) + ')');
 				continue;
 			}
 			if (f.size === 0) {
@@ -1986,33 +2123,40 @@ html.light #header .logo {
 				continue;
 			}
 			added++;
-			// Capture both the File reference AND the validated mime in
-			// the IIFE — both are var-scoped to the loop, so a naked
+			// Capture both the File reference AND the validated mime/kind
+			// in the IIFE — both are var-scoped to the loop, so a naked
 			// closure would race the next iteration and tag every chip
-			// with the loop's final mime.
-			(function(file, fileMime) {
+			// with the loop's final values.
+			(function(file, fileMime, fileKind) {
 				var reader = new FileReader();
 				reader.onload = function() {
 					try {
 						var b64 = arrayBufferToBase64(reader.result);
-						attachments.push({
-							name: file.name || 'image',
+						var entry = {
+							name: file.name || 'attachment',
 							mimeType: fileMime,
+							kind: fileKind,
 							sizeBytes: file.size,
-							dataB64: b64,
-							objectUrl: URL.createObjectURL(file)
-						});
+							dataB64: b64
+						};
+						// Only image attachments need a thumbnail blob URL —
+						// docs and text get a generic glyph instead, which
+						// avoids spawning a blob URL per text upload.
+						if (fileKind === 'image') {
+							entry.objectUrl = URL.createObjectURL(file);
+						}
+						attachments.push(entry);
 						renderAttachmentStrip();
 						updateSendBtn();
 					} catch (e) {
-						setAttachError('Failed to read ' + (file.name || 'image') + ': ' + e.message);
+						setAttachError('Failed to read ' + (file.name || 'file') + ': ' + e.message);
 					}
 				};
 				reader.onerror = function() {
-					setAttachError('Failed to read ' + (file.name || 'image'));
+					setAttachError('Failed to read ' + (file.name || 'file'));
 				};
 				reader.readAsArrayBuffer(file);
-			})(f, mime);
+			})(f, mime, kind);
 		}
 		if (rejections.length > 0) {
 			setAttachError(rejections.join(' · '));

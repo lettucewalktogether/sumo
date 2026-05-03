@@ -39,7 +39,8 @@ Felix connects you (via CLI or web chat) to LLMs — Claude, GPT, Gemini, Qwen, 
 - Multiple agents per install, each with its own model, workspace, persona, and tool policy.
 - Subagents invocable via the `task` tool, so a supervisor can delegate to a specialist with a different model.
 - Per-agent allow/deny lists for every built-in and MCP-provided tool.
-- Vision: paste image paths in the CLI or drop them in web chat; bytes go straight to the model.
+- Multi-modal input: drag, drop, paste, or pick **images** (jpg, png, gif, webp, bmp), **PDFs**, **Word docs**, and **plain-text / source files** in the web chat. Images go straight to the model as native vision input; PDFs and DOCX are extracted server-side via `pdftotext` / `pandoc`; text files are inlined as fenced blocks. The CLI accepts image paths via the same `felix chat` prompt — see `## Web chat attachments` below.
+- Multilingual chat: textarea respects per-paragraph direction (`dir="auto"` — Arabic, Hebrew, mixed-script work); IME-safe Enter (CJK/Vietnamese/Korean composition candidates commit cleanly without firing the message); attached text files are decoded BOM-aware (UTF-8, UTF-16 LE/BE with or without BOM, falls through to a clear "save as UTF-8" hint for legacy encodings).
 - Cron jobs: recurring prompts on configurable intervals, with pause/resume/remove management.
 - MCP client: Streamable-HTTP and stdio transports, OAuth2 (client credentials, authorization code + PKCE) and bearer auth, in-chat re-authentication, per-server circuit breaker.
 
@@ -142,9 +143,56 @@ Menu: **Chat**, **Jobs**, **Logs**, **Settings**, **Restart**, **Quit**.
 
 The Settings page has tabs for Agents, Providers, Models, Intelligence, Security, Messaging, MCP, Skills, Memory, and Gateway — most things you'd otherwise edit in `felix.json5` are reachable here.
 
-**Web chat** at `/chat`: agent + session selectors, streaming responses, light/dark toggle, inline tool-call display with collapsible output, inline "Re-authenticate" button when an MCP token expires, live trace panel.
+**Web chat** at `/chat`: agent + session selectors, streaming responses, light/dark toggle, inline tool-call display with collapsible output, inline "Re-authenticate" button when an MCP token expires, live trace panel, multi-modal attachments (see below).
 
 **Environment variables.** macOS `.app` bundles don't inherit shell environment variables; Felix.app loads `~/.zshrc` / `~/.bashrc` at startup, so `export ANTHROPIC_API_KEY=...` works. On Windows, set via System Settings or PowerShell `[System.Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY","sk-ant-...","User")`. Either way, you can put keys directly in `felix.json5` instead.
+
+
+
+## Web chat attachments
+
+The web chat at `http://127.0.0.1:18789/chat` accepts files three ways: click the **+** button next to **Send**, drag and drop onto the chat window, or paste an image from the clipboard. Up to **20 attachments per message**, with chips above the textarea showing each file's name, size, and a thumbnail (images) or kind badge (PDF / DOC / TXT). Click the × on any chip to remove it before sending; the input area highlights green during a drag.
+
+### Supported file types
+
+| Kind | Examples | Server handling | Per-file cap |
+|------|----------|-----------------|--------------|
+| **Images** | `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp` | Sent as native vision input to the model — same path as the CLI's image-attachment flow. | 10 MiB |
+| **PDFs** | `.pdf` | Extracted to plain text server-side via `pdftotext -layout -enc UTF-8` and inlined into the user message as a fenced block. | 25 MiB input, 256 KiB extracted |
+| **Word docs** | `.docx` | Extracted via `pandoc -f docx -t plain` and inlined as a fenced block. | 25 MiB input, 256 KiB extracted |
+| **Plain text & code** | `.txt`, `.md`, `.csv`, `.json`, `.yaml`, `.toml`, `.xml`, `.html`, `.css`, `.js`, `.ts`, `.go`, `.py`, `.rb`, `.rs`, `.sql`, `.sh`, `.log`, plus any `text/*` MIME | UTF-8 decoded directly; UTF-8/UTF-16 BOM stripped or transcoded; legacy encodings (Latin-1, GBK, Shift-JIS) rejected with a "save as UTF-8" hint. | 25 MiB input, 256 KiB extracted |
+
+PDFs and Word docs need the matching binary on `$PATH` — `brew install poppler` for `pdftotext`, `brew install pandoc` for DOCX (or `apt install poppler-utils pandoc` on Debian/Ubuntu). If a binary is missing, the chat surfaces a one-line error like `pdftotext not found on PATH (install poppler …)` instead of swallowing the upload.
+
+### How extracted content reaches the model
+
+Image attachments flow through the runtime's existing multimodal pipeline (`llm.ImageContent`) and are sent to the model as native vision input — Anthropic, OpenAI (`gpt-4o`-class), and Gemini providers all accept this. Document attachments are converted to plain text server-side and appended to the user message as fenced blocks:
+
+```
+<user's typed text>
+
+--- attached: report.pdf ---
+<extracted text>
+--- end ---
+
+--- attached: notes.md ---
+<file body>
+--- end ---
+```
+
+The 256 KiB output cap per attachment keeps the prompt finite even on hostile input — anything past that gets truncated with a `[... truncated]` marker. For larger documents, drop the file into the agent's workspace and ask it to read with the `read_file` tool instead, so the agent can chunk and search rather than slurping the whole thing into one prompt.
+
+### Multilingual input
+
+The textarea sets `dir="auto"`, so Arabic, Hebrew, and mixed-script messages render with the correct per-paragraph direction without manual toggling. Enter sends the message except while an IME is composing — CJK, Vietnamese, and Korean candidates commit normally without triggering an early send. Attached text files decode with BOM detection (UTF-8 BOM stripped; UTF-16 LE/BE with or without BOM transcoded to UTF-8); legacy single-byte encodings are rejected with a clear hint rather than silently mangled.
+
+### Pure-attachment messages
+
+If you attach a file without typing any text, the gateway substitutes a sensible default prompt so providers always see a non-empty user turn:
+
+- Image-only message: `What's in this image?`
+- Document-only message: `Please review the attached document.`
+- Mixed images + docs: `Please review the attached files.`
 
 
 

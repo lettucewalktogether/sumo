@@ -1,10 +1,14 @@
 package gateway
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +17,36 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// minimalPDF returns the bytes of a tiny single-page PDF whose visible
+// content is `body`. Only the structural pieces pdftotext needs are
+// included — used so the extraction tests don't carry an opaque binary
+// fixture.
+func minimalPDF(t *testing.T, body string) []byte {
+	t.Helper()
+	stream := fmt.Sprintf("BT /F1 12 Tf 72 720 Td (%s) Tj ET", body)
+	const obj1 = "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+	const obj2 = "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+	obj3 := "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] " +
+		"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n"
+	obj4 := fmt.Sprintf("4 0 obj << /Length %d >> stream\n%s\nendstream endobj\n", len(stream)+1, stream)
+	const obj5 = "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+
+	var buf bytes.Buffer
+	buf.WriteString("%PDF-1.4\n")
+	offsets := []int{0}
+	for _, obj := range []string{obj1, obj2, obj3, obj4, obj5} {
+		offsets = append(offsets, buf.Len())
+		buf.WriteString(obj)
+	}
+	xrefStart := buf.Len()
+	buf.WriteString("xref\n0 6\n0000000000 65535 f \n")
+	for i := 1; i <= 5; i++ {
+		fmt.Fprintf(&buf, "%010d 00000 n \n", offsets[i])
+	}
+	fmt.Fprintf(&buf, "trailer << /Size 6 /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", xrefStart)
+	return buf.Bytes()
+}
 
 // TestSafeRawMessage verifies the WS layer's RawMessage guard.
 // Empty or invalid input must become nil (marshals to null) instead
@@ -116,45 +150,50 @@ func TestWriteJSONIsGoroutineSafe(t *testing.T) {
 // TestDecodeChatAttachments covers the chat.send attachment guard. The
 // decoder is the only place malformed UI input is rejected before the
 // bytes flow into the runtime, so each branch needs explicit coverage:
-// the MIME allowlist, base64 validity, the per-image size cap, and the
-// per-message count cap.
+// MIME allowlist (images, plain text, extractable docs), base64
+// validity, per-image and per-doc size caps, per-message count cap,
+// plain-text UTF-8 validation, and BOM-aware UTF-16 transcode.
 func TestDecodeChatAttachments(t *testing.T) {
+	ctx := context.Background()
 	pngBytes := []byte("\x89PNG\r\n\x1a\nfake-png-data")
 	pngB64 := base64.StdEncoding.EncodeToString(pngBytes)
 
 	t.Run("nil_input", func(t *testing.T) {
-		out, err := decodeChatAttachments(nil)
+		out, err := decodeChatAttachments(ctx, nil)
 		require.NoError(t, err)
-		assert.Nil(t, out)
+		assert.Nil(t, out.Images)
+		assert.Nil(t, out.Docs)
 	})
 
 	t.Run("empty_slice", func(t *testing.T) {
-		out, err := decodeChatAttachments([]chatAttachmentParam{})
+		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{})
 		require.NoError(t, err)
-		assert.Nil(t, out)
+		assert.Nil(t, out.Images)
+		assert.Nil(t, out.Docs)
 	})
 
 	t.Run("single_valid_png", func(t *testing.T) {
-		out, err := decodeChatAttachments([]chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
 			{MimeType: "image/png", Data: pngB64, Name: "x.png"},
 		})
 		require.NoError(t, err)
-		require.Len(t, out, 1)
-		assert.Equal(t, "image/png", out[0].MimeType)
-		assert.Equal(t, pngBytes, out[0].Data)
+		require.Len(t, out.Images, 1)
+		assert.Equal(t, "image/png", out.Images[0].MimeType)
+		assert.Equal(t, pngBytes, out.Images[0].Data)
+		assert.Empty(t, out.Docs)
 	})
 
 	t.Run("mime_normalised", func(t *testing.T) {
-		out, err := decodeChatAttachments([]chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
 			{MimeType: "  IMAGE/JPEG  ", Data: pngB64},
 		})
 		require.NoError(t, err)
-		require.Len(t, out, 1)
-		assert.Equal(t, "image/jpeg", out[0].MimeType)
+		require.Len(t, out.Images, 1)
+		assert.Equal(t, "image/jpeg", out.Images[0].MimeType)
 	})
 
 	t.Run("multiple_mixed_mimes", func(t *testing.T) {
-		out, err := decodeChatAttachments([]chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
 			{MimeType: "image/png", Data: pngB64},
 			{MimeType: "image/jpeg", Data: pngB64},
 			{MimeType: "image/gif", Data: pngB64},
@@ -162,20 +201,19 @@ func TestDecodeChatAttachments(t *testing.T) {
 			{MimeType: "image/bmp", Data: pngB64},
 		})
 		require.NoError(t, err)
-		assert.Len(t, out, 5)
+		assert.Len(t, out.Images, 5)
 	})
 
 	t.Run("rejects_unsupported_mime", func(t *testing.T) {
-		_, err := decodeChatAttachments([]chatAttachmentParam{
-			{MimeType: "application/pdf", Data: pngB64},
+		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+			{MimeType: "audio/mpeg", Data: pngB64},
 		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported mime")
 	})
 
 	t.Run("rejects_unsupported_mime_at_index", func(t *testing.T) {
-		// Second attachment is bad — index should appear in the error.
-		_, err := decodeChatAttachments([]chatAttachmentParam{
+		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
 			{MimeType: "image/png", Data: pngB64},
 			{MimeType: "audio/mp3", Data: pngB64},
 		})
@@ -184,7 +222,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 	})
 
 	t.Run("rejects_invalid_base64", func(t *testing.T) {
-		_, err := decodeChatAttachments([]chatAttachmentParam{
+		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
 			{MimeType: "image/png", Data: "not!!!base64@@@"},
 		})
 		require.Error(t, err)
@@ -192,7 +230,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 	})
 
 	t.Run("rejects_empty_data", func(t *testing.T) {
-		_, err := decodeChatAttachments([]chatAttachmentParam{
+		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
 			{MimeType: "image/png", Data: ""},
 		})
 		require.Error(t, err)
@@ -201,23 +239,22 @@ func TestDecodeChatAttachments(t *testing.T) {
 
 	t.Run("rejects_oversized_image", func(t *testing.T) {
 		big := make([]byte, maxAttachmentBytes+1)
-		_, err := decodeChatAttachments([]chatAttachmentParam{
+		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
 			{MimeType: "image/png", Data: base64.StdEncoding.EncodeToString(big)},
 		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "too large")
 	})
 
-	t.Run("accepts_at_size_cap", func(t *testing.T) {
-		// Boundary case: exactly the cap is allowed.
+	t.Run("accepts_image_at_size_cap", func(t *testing.T) {
 		atCap := make([]byte, maxAttachmentBytes)
-		atCap[0] = 0xFF // non-zero so the empty-data guard doesn't fire
-		out, err := decodeChatAttachments([]chatAttachmentParam{
+		atCap[0] = 0xFF
+		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
 			{MimeType: "image/png", Data: base64.StdEncoding.EncodeToString(atCap)},
 		})
 		require.NoError(t, err)
-		require.Len(t, out, 1)
-		assert.Equal(t, maxAttachmentBytes, len(out[0].Data))
+		require.Len(t, out.Images, 1)
+		assert.Equal(t, maxAttachmentBytes, len(out.Images[0].Data))
 	})
 
 	t.Run("rejects_too_many_attachments", func(t *testing.T) {
@@ -225,7 +262,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 		for i := range atts {
 			atts[i] = chatAttachmentParam{MimeType: "image/png", Data: pngB64}
 		}
-		_, err := decodeChatAttachments(atts)
+		_, err := decodeChatAttachments(ctx, atts)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "too many")
 	})
@@ -235,9 +272,157 @@ func TestDecodeChatAttachments(t *testing.T) {
 		for i := range atts {
 			atts[i] = chatAttachmentParam{MimeType: "image/png", Data: pngB64}
 		}
-		out, err := decodeChatAttachments(atts)
+		out, err := decodeChatAttachments(ctx, atts)
 		require.NoError(t, err)
-		assert.Len(t, out, maxAttachmentCount)
+		assert.Len(t, out.Images, maxAttachmentCount)
+	})
+
+	// --- Plain text ---
+
+	t.Run("plain_text_utf8", func(t *testing.T) {
+		body := "Hello — 世界! مرحبا."
+		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+			{MimeType: "text/markdown", Data: base64.StdEncoding.EncodeToString([]byte(body)), Name: "note.md"},
+		})
+		require.NoError(t, err)
+		require.Empty(t, out.Images)
+		require.Len(t, out.Docs, 1)
+		assert.Equal(t, "note.md", out.Docs[0].Name)
+		assert.Equal(t, body, out.Docs[0].Text)
+	})
+
+	t.Run("plain_text_unnamed_falls_back", func(t *testing.T) {
+		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+			{MimeType: "text/plain", Data: base64.StdEncoding.EncodeToString([]byte("hi"))},
+		})
+		require.NoError(t, err)
+		require.Len(t, out.Docs, 1)
+		assert.Equal(t, "attachment-1", out.Docs[0].Name)
+	})
+
+	t.Run("strips_utf8_bom", func(t *testing.T) {
+		body := []byte("\xEF\xBB\xBFhello")
+		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+			{MimeType: "text/plain", Data: base64.StdEncoding.EncodeToString(body)},
+		})
+		require.NoError(t, err)
+		require.Len(t, out.Docs, 1)
+		assert.Equal(t, "hello", out.Docs[0].Text)
+	})
+
+	t.Run("decodes_utf16_le_with_bom", func(t *testing.T) {
+		// "héllo" in UTF-16 LE with BOM: FF FE 'h' 00 'é'(00E9) low/high 00 'l' 00 'l' 00 'o' 00
+		body := []byte{0xFF, 0xFE,
+			0x68, 0x00,
+			0xE9, 0x00,
+			0x6C, 0x00,
+			0x6C, 0x00,
+			0x6F, 0x00}
+		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+			{MimeType: "text/plain", Data: base64.StdEncoding.EncodeToString(body)},
+		})
+		require.NoError(t, err)
+		require.Len(t, out.Docs, 1)
+		assert.Equal(t, "héllo", out.Docs[0].Text)
+	})
+
+	t.Run("decodes_utf16_be_with_bom", func(t *testing.T) {
+		body := []byte{0xFE, 0xFF,
+			0x00, 0x68,
+			0x00, 0xE9,
+			0x00, 0x6C,
+			0x00, 0x6C,
+			0x00, 0x6F}
+		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+			{MimeType: "text/plain", Data: base64.StdEncoding.EncodeToString(body)},
+		})
+		require.NoError(t, err)
+		require.Len(t, out.Docs, 1)
+		assert.Equal(t, "héllo", out.Docs[0].Text)
+	})
+
+	t.Run("guesses_utf16_le_without_bom", func(t *testing.T) {
+		// Notepad-without-BOM case — pad with enough text that the
+		// 30 % NUL heuristic fires, since the test sample needs to be
+		// decisively UTF-16-shaped.
+		body := []byte{}
+		for _, r := range []byte("Hello world this is a longer ASCII test string.") {
+			body = append(body, r, 0x00)
+		}
+		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+			{MimeType: "text/plain", Data: base64.StdEncoding.EncodeToString(body)},
+		})
+		require.NoError(t, err)
+		require.Len(t, out.Docs, 1)
+		assert.Contains(t, out.Docs[0].Text, "Hello world")
+	})
+
+	t.Run("rejects_latin1_with_clear_error", func(t *testing.T) {
+		// 0xE9 alone is invalid UTF-8 (start of a multibyte sequence
+		// without continuation), and the parity heuristic doesn't fire
+		// — so the decoder must return a "save as UTF-8" hint rather
+		// than silently mangle bytes.
+		body := []byte("caf\xE9 — not utf-8 here")
+		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+			{MimeType: "text/plain", Data: base64.StdEncoding.EncodeToString(body)},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "UTF-8")
+	})
+
+	// --- Document extraction (skipped if extractor binaries not on PATH) ---
+
+	t.Run("extracts_pdf", func(t *testing.T) {
+		if _, err := exec.LookPath("pdftotext"); err != nil {
+			t.Skip("pdftotext not installed")
+		}
+		// A minimal PDF generated inline — simpler than carrying a fixture.
+		pdf := minimalPDF(t, "Hello world from PDF.")
+		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+			{MimeType: "application/pdf", Data: base64.StdEncoding.EncodeToString(pdf), Name: "test.pdf"},
+		})
+		require.NoError(t, err)
+		require.Len(t, out.Docs, 1)
+		assert.Contains(t, out.Docs[0].Text, "Hello world from PDF")
+	})
+
+	t.Run("missing_extractor_binary_yields_install_hint", func(t *testing.T) {
+		// Stub the extractor map so the lookup fails predictably.
+		orig := extractorByMime
+		t.Cleanup(func() { extractorByMime = orig })
+		extractorByMime = map[string]extractorBinary{
+			"application/pdf": {bin: "this-binary-does-not-exist-xyz", args: nil, pkgHint: "install xyz"},
+		}
+		body := []byte("not a real pdf")
+		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+			{MimeType: "application/pdf", Data: base64.StdEncoding.EncodeToString(body)},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "install xyz")
+	})
+}
+
+// TestComposeUserText pins the format of the inlined doc blocks so a
+// future tweak doesn't accidentally change the prompt the model sees.
+func TestComposeUserText(t *testing.T) {
+	t.Run("no_docs_returns_text_unchanged", func(t *testing.T) {
+		assert.Equal(t, "hello", composeUserText("hello", nil))
+	})
+
+	t.Run("appends_each_doc_as_fenced_block", func(t *testing.T) {
+		got := composeUserText("review please", []extractedDoc{
+			{Name: "a.md", Text: "first body"},
+			{Name: "b.txt", Text: "second body\n"},
+		})
+		want := "review please" +
+			"\n\n--- attached: a.md ---\nfirst body\n--- end ---" +
+			"\n\n--- attached: b.txt ---\nsecond body\n--- end ---"
+		assert.Equal(t, want, got)
+	})
+
+	t.Run("empty_user_text_still_emits_block", func(t *testing.T) {
+		got := composeUserText("", []extractedDoc{{Name: "x", Text: "y"}})
+		assert.Equal(t, "--- attached: x ---\ny\n--- end ---", got)
 	})
 }
 
