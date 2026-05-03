@@ -188,6 +188,8 @@ The 256 KiB output cap per attachment keeps the prompt finite even on hostile in
 
 The textarea sets `dir="auto"`, which the browser resolves per-paragraph from the first strong-directional character in each line — so Arabic and Hebrew lines flow right-to-left, English lines stay left-to-right, and a mixed-script message gets each paragraph oriented correctly without any user toggling. Enter sends the message *except* while an IME is composing — the handler tracks `compositionstart` / `compositionend` and skips the send when `KeyboardEvent.isComposing` (or the legacy `keyCode === 229`) is true, so CJK, Vietnamese, and Korean candidate-commit Enter no longer fires the message prematurely. Attached text files decode with BOM detection (UTF-8 BOM stripped; UTF-16 LE/BE with or without BOM transcoded to UTF-8 via `golang.org/x/text/encoding/unicode`); legacy single-byte encodings are rejected with a clear hint rather than silently mangled.
 
+The chat surface itself is model-neutral — pick whichever provider speaks the languages you care about. Frontier models (Claude, GPT, Gemini) handle most major languages well; for **Southeast Asian languages** (Bahasa Indonesia, Malay, Thai, Vietnamese, Tamil, Filipino, Singlish, regional variants) [SEA-LION](https://sea-lion.ai/) from AI Singapore is purpose-built and plugs in via the `openai-compatible` provider — see the SEA-LION block in **LLM providers › Per-provider setup** below.
+
 ### Pure-attachment messages
 
 If you attach a file without typing any text, the gateway substitutes a sensible default prompt so providers always see a non-empty user turn:
@@ -240,7 +242,7 @@ Felix supports multiple providers simultaneously. Each is defined in the `provid
 | `openai` | OpenAI's native API | GPT models |
 | `gemini` | Google's native Gemini SDK | Gemini models |
 | `qwen` | Alibaba Cloud DashScope | Qwen models |
-| `openai-compatible` | Anything implementing `/v1/chat/completions` | Ollama, LM Studio, DeepSeek, LiteLLM, vLLM |
+| `openai-compatible` | Anything implementing `/v1/chat/completions` | Ollama, LM Studio, DeepSeek, [SEA-LION](https://sea-lion.ai/), LiteLLM, vLLM |
 | `local` | Bundled Ollama supervised by Felix | Fully offline / no API key |
 
 ### Per-provider setup
@@ -276,6 +278,23 @@ Felix supports multiple providers simultaneously. Each is defined in the `provid
   "base_url": "https://api.deepseek.com/v1"
 }
 // Models: deepseek-chat, deepseek-coder, deepseek-reasoner
+
+// SEA-LION (AI Singapore) — open-source LLMs purpose-built for
+// Southeast Asian languages: Bahasa Indonesia, Malay, Thai, Vietnamese,
+// Tamil, Filipino, plus Singlish and other regional variants. Get a key
+// at https://playground.sea-lion.ai/key-manager
+"sealion": {
+  "kind": "openai-compatible",
+  "api_key": "sl-...",
+  "base_url": "https://api.sea-lion.ai/v1"
+}
+// Models (note the aisingapore/ prefix is part of the model id, not a
+// second provider — felix splits provider/model only on the first slash):
+//   aisingapore/Gemma-SEA-LION-v4-27B-IT   — Gemma-3-based instruct (128k window)
+//   aisingapore/Llama-SEA-LION-v3.5-70B-R  — Llama-3-based reasoning  (128k window)
+// Reference as: sealion/aisingapore/Gemma-SEA-LION-v4-27B-IT
+// Public API rate limit is 10 requests/min/user as of writing; email
+// sealion@aisingapore.org for higher limits.
 
 // Bundled Ollama (wired up automatically by `felix onboard`)
 "local": { "kind": "local", "base_url": "http://127.0.0.1:18790/v1" }
