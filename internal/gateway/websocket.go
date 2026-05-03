@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -281,9 +283,70 @@ func (h *WebSocketHandler) dispatch(conn *websocket.Conn, req JSONRPCRequest) {
 }
 
 type chatSendParams struct {
-	AgentID    string `json:"agentId"`
-	Text       string `json:"text"`
-	SessionKey string `json:"sessionKey,omitempty"`
+	AgentID     string                `json:"agentId"`
+	Text        string                `json:"text"`
+	SessionKey  string                `json:"sessionKey,omitempty"`
+	Attachments []chatAttachmentParam `json:"attachments,omitempty"`
+}
+
+// chatAttachmentParam is one inline binary attachment carried by chat.send.
+// Data is standard base64 (RFC 4648, padding required) — the same encoding
+// the chat UI produces from a FileReader / clipboard read.
+type chatAttachmentParam struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
+	Name     string `json:"name,omitempty"`
+}
+
+// Limits matched to the CLI's image-attachment behaviour (cmd/felix/main.go
+// tryReadImage). 10 MiB per image, with a per-message count cap to bound
+// the WebSocket frame size and keep providers from rejecting the request.
+const (
+	maxAttachmentBytes = 10 * 1024 * 1024
+	maxAttachmentCount = 20
+)
+
+// allowedAttachmentMimes mirrors the CLI's imageExtensions map. Anything not
+// listed here is rejected at the WebSocket boundary so a malformed UI can't
+// push arbitrary bytes downstream.
+var allowedAttachmentMimes = map[string]struct{}{
+	"image/jpeg": {},
+	"image/png":  {},
+	"image/gif":  {},
+	"image/webp": {},
+	"image/bmp":  {},
+}
+
+// decodeChatAttachments validates and base64-decodes the attachments from a
+// chat.send request into the runtime's image content type. It enforces the
+// per-image size cap, the per-message count cap, and the MIME allowlist.
+// Returned errors are safe to send back to the client.
+func decodeChatAttachments(atts []chatAttachmentParam) ([]llm.ImageContent, error) {
+	if len(atts) == 0 {
+		return nil, nil
+	}
+	if len(atts) > maxAttachmentCount {
+		return nil, fmt.Errorf("too many attachments (%d > %d)", len(atts), maxAttachmentCount)
+	}
+	images := make([]llm.ImageContent, 0, len(atts))
+	for i, att := range atts {
+		mime := strings.ToLower(strings.TrimSpace(att.MimeType))
+		if _, ok := allowedAttachmentMimes[mime]; !ok {
+			return nil, fmt.Errorf("attachment %d: unsupported mime type %q", i, att.MimeType)
+		}
+		data, err := base64.StdEncoding.DecodeString(att.Data)
+		if err != nil {
+			return nil, fmt.Errorf("attachment %d: invalid base64: %w", i, err)
+		}
+		if len(data) == 0 {
+			return nil, fmt.Errorf("attachment %d: empty data", i)
+		}
+		if len(data) > maxAttachmentBytes {
+			return nil, fmt.Errorf("attachment %d: too large (%d > %d bytes)", i, len(data), maxAttachmentBytes)
+		}
+		images = append(images, llm.ImageContent{MimeType: mime, Data: data})
+	}
+	return images, nil
 }
 
 func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCRequest) {
@@ -299,6 +362,31 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 
 	if params.AgentID == "" {
 		params.AgentID = "default"
+	}
+
+	images, err := decodeChatAttachments(params.Attachments)
+	if err != nil {
+		writeJSON(conn, JSONRPCResponse{
+			JSONRPC: "2.0",
+			Error:   map[string]any{"code": -32602, "message": "Invalid attachment: " + err.Error()},
+			ID:      req.ID,
+		})
+		return
+	}
+
+	// Match the CLI default: a pure-attachment message gets a default
+	// prompt so providers always see a non-empty user text part.
+	if strings.TrimSpace(params.Text) == "" {
+		if len(images) > 0 {
+			params.Text = "What's in this image?"
+		} else {
+			writeJSON(conn, JSONRPCResponse{
+				JSONRPC: "2.0",
+				Error:   map[string]any{"code": -32602, "message": "Empty message: text or attachments required"},
+				ID:      req.ID,
+			})
+			return
+		}
 	}
 
 	h.mu.RLock()
@@ -445,7 +533,7 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 			ID: rpcID,
 		})
 	})
-	trace.Mark("ws.received", "msg_chars", len(params.Text))
+	trace.Mark("ws.received", "msg_chars", len(params.Text), "image_count", len(images))
 	runCtx = agent.WithTrace(runCtx, trace)
 
 	// Track this run so chat.abort and disconnect can cancel it
@@ -453,7 +541,7 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 	h.activeRuns[conn] = runCancel
 	h.mu.Unlock()
 
-	events, err := rt.Run(runCtx, params.Text, nil)
+	events, err := rt.Run(runCtx, params.Text, images)
 	if err != nil {
 		runCancel()
 		h.mu.Lock()

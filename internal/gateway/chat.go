@@ -12,7 +12,9 @@ func NewChatHandler(port int) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src ws: wss:; img-src 'self' data:")
+		// blob: in img-src is needed for the in-page attachment thumbnails
+		// generated via URL.createObjectURL on dropped/picked image files.
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src ws: wss:; img-src 'self' data: blob:")
 		fmt.Fprintf(w, chatHTML, port)
 	}
 }
@@ -536,6 +538,128 @@ html.light #header .logo {
 	display: none;
 }
 #stop-btn:hover { opacity: 0.85; }
+
+/* Attachment UI — chip strip above the textarea, attach button next to send. */
+#input-area-wrap {
+	background: var(--bg-header);
+	border-top: 1px solid var(--border);
+	padding: 0.75rem 1.5rem;
+	flex-shrink: 0;
+	transition: background 0.3s, border-color 0.3s;
+	position: relative;
+}
+#input-area-wrap.drag-over {
+	background: color-mix(in srgb, var(--accent) 15%%, var(--bg-header));
+}
+#input-area-wrap.drag-over::after {
+	content: "Drop images to attach";
+	position: absolute;
+	inset: 0.75rem 1.5rem;
+	border: 2px dashed var(--accent);
+	border-radius: 10px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--accent);
+	font-size: 0.95rem;
+	font-weight: 600;
+	pointer-events: none;
+	background: color-mix(in srgb, var(--bg-header) 80%%, transparent);
+}
+#attachment-strip {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	margin-bottom: 0.5rem;
+}
+#attachment-strip:empty { display: none; }
+.attachment-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	background: var(--bg-input);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 0.25rem 0.5rem 0.25rem 0.25rem;
+	max-width: 220px;
+	font-size: 0.8rem;
+	color: var(--text-em);
+}
+.attachment-thumb {
+	width: 32px; height: 32px;
+	border-radius: 4px;
+	object-fit: cover;
+	flex-shrink: 0;
+	background: var(--bg);
+}
+.attachment-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	flex: 1;
+}
+.attachment-size {
+	color: var(--text-muted);
+	font-size: 0.7rem;
+	flex-shrink: 0;
+}
+.attachment-remove {
+	background: none;
+	border: none;
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: 1rem;
+	line-height: 1;
+	padding: 0 0.15rem;
+	flex-shrink: 0;
+}
+.attachment-remove:hover { color: var(--error); }
+#input-area {
+	background: transparent;
+	padding: 0;
+	border-top: none;
+}
+#attach-btn {
+	background: var(--bg-input);
+	color: var(--text-em);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	width: 40px;
+	height: 40px;
+	padding: 0;
+	font-size: 1.4rem;
+	font-weight: 400;
+	line-height: 1;
+	cursor: pointer;
+	transition: background 0.2s, border-color 0.2s, color 0.2s;
+	align-self: flex-end;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+#attach-btn:hover { border-color: var(--accent); color: var(--accent); }
+#attach-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.msg .user-attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+	margin-top: 0.4rem;
+}
+.msg .user-attachments img {
+	max-width: 220px;
+	max-height: 180px;
+	border-radius: 6px;
+	border: 1px solid var(--border);
+	display: block;
+}
+#attach-error {
+	color: var(--error);
+	font-size: 0.75rem;
+	margin-bottom: 0.4rem;
+	min-height: 0;
+	transition: min-height 0.15s;
+}
+#attach-error:empty { display: none; }
 </style>
 </head>
 <body>
@@ -564,10 +688,16 @@ html.light #header .logo {
 	<div id="trace-header"><span id="trace-title">Live trace</span><button id="trace-clear-btn" title="Clear trace">clear</button></div>
 	<div id="trace-list"></div>
 </div>
-<div id="input-area">
-	<textarea id="input" rows="1" placeholder="Type a message..." autofocus></textarea>
-	<button id="send-btn" disabled>Send</button>
-	<button id="stop-btn">Stop</button>
+<div id="input-area-wrap">
+	<div id="attach-error" aria-live="polite"></div>
+	<div id="attachment-strip" aria-label="Attached files"></div>
+	<div id="input-area">
+		<textarea id="input" rows="1" placeholder="Type a message or drop an image..." autofocus></textarea>
+		<button id="attach-btn" type="button" title="Attach image (jpg, png, gif, webp, bmp · max 10 MB)" aria-label="Attach image">+</button>
+		<input id="file-picker" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/bmp" multiple style="display:none">
+		<button id="send-btn" disabled>Send</button>
+		<button id="stop-btn">Stop</button>
+	</div>
 </div>
 
 <script>
@@ -586,6 +716,23 @@ html.light #header .logo {
 	var sessionSelect = document.getElementById('session-select');
 	var newSessionBtn = document.getElementById('new-session-btn');
 	var toggleToolsBtn = document.getElementById('toggle-tools-btn');
+	var inputAreaWrap = document.getElementById('input-area-wrap');
+	var attachBtn = document.getElementById('attach-btn');
+	var filePicker = document.getElementById('file-picker');
+	var attachmentStrip = document.getElementById('attachment-strip');
+	var attachErrorEl = document.getElementById('attach-error');
+
+	// Attachment limits — must match decodeChatAttachments in websocket.go.
+	var MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+	var MAX_ATTACHMENT_COUNT = 20;
+	var ALLOWED_ATTACHMENT_MIMES = {
+		'image/jpeg': true, 'image/png': true, 'image/gif': true,
+		'image/webp': true, 'image/bmp': true
+	};
+	// Pending attachments for the next chat.send.
+	// Each entry: { name, mimeType, sizeBytes, dataB64, objectUrl }.
+	var attachments = [];
+	var attachErrorTimer = null;
 
 	// Tool visibility toggle
 	var toolsHidden = localStorage.getItem('felix-hide-tools') === 'true';
@@ -1323,10 +1470,29 @@ html.light #header .logo {
 		};
 	}
 
-	function addUserMsg(text) {
+	function addUserMsg(text, atts) {
 		var div = document.createElement('div');
 		div.className = 'msg user';
-		div.textContent = text;
+		if (text) {
+			var p = document.createElement('div');
+			p.textContent = text;
+			div.appendChild(p);
+		}
+		if (atts && atts.length > 0) {
+			var strip = document.createElement('div');
+			strip.className = 'user-attachments';
+			for (var i = 0; i < atts.length; i++) {
+				var img = document.createElement('img');
+				// Prefer the live object URL (cheap, no re-encoding); fall
+				// back to a data: URL so historical replays still render
+				// even after the originating object URL is revoked.
+				img.src = atts[i].objectUrl ||
+					('data:' + atts[i].mimeType + ';base64,' + atts[i].dataB64);
+				img.alt = atts[i].name || 'attachment';
+				strip.appendChild(img);
+			}
+			div.appendChild(strip);
+		}
 		messagesEl.appendChild(div);
 		scrollToBottom();
 	}
@@ -1648,21 +1814,43 @@ html.light #header .logo {
 
 	function sendMessage() {
 		var text = inputEl.value.trim();
-		if (!text || sending) return;
+		if (sending) return;
+		if (!text && attachments.length === 0) return;
 		if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-		addUserMsg(text);
+		// Hand the attachment list to the user-message bubble so the
+		// thumbnails appear immediately, then drop our reference so a
+		// follow-up send doesn't re-include the same images.
+		var sentAtts = attachments;
+		attachments = [];
+
+		addUserMsg(text, sentAtts);
 		sending = true;
 		updateSendBtn();
 		msgId++;
 
+		var params = {
+			agentId: agentSelect.value,
+			text: text,
+			sessionKey: sessionSelect.value
+		};
+		if (sentAtts.length > 0) {
+			params.attachments = sentAtts.map(function(a) {
+				return { mimeType: a.mimeType, data: a.dataB64, name: a.name };
+			});
+		}
 		ws.send(JSON.stringify({
 			jsonrpc: '2.0',
 			method: 'chat.send',
-			params: { agentId: agentSelect.value, text: text, sessionKey: sessionSelect.value },
+			params: params,
 			id: msgId
 		}));
 
+		// Re-render the (now empty) chip strip and clear the input box.
+		// Keep the object URLs alive — addUserMsg's <img> tags still
+		// reference them — they'll be GC'd along with their bubble.
+		renderAttachmentStrip();
+		clearAttachError();
 		inputEl.value = '';
 		inputEl.style.height = 'auto';
 	}
@@ -1690,6 +1878,212 @@ html.light #header .logo {
 	inputEl.addEventListener('input', function() {
 		this.style.height = 'auto';
 		this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+	});
+
+	// ----- Attachments -----------------------------------------------
+
+	function setAttachError(msg) {
+		attachErrorEl.textContent = msg;
+		if (attachErrorTimer) clearTimeout(attachErrorTimer);
+		attachErrorTimer = setTimeout(clearAttachError, 5000);
+	}
+
+	function clearAttachError() {
+		attachErrorEl.textContent = '';
+		if (attachErrorTimer) {
+			clearTimeout(attachErrorTimer);
+			attachErrorTimer = null;
+		}
+	}
+
+	function formatBytes(n) {
+		if (n < 1024) return n + ' B';
+		if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+		return (n / (1024 * 1024)).toFixed(1) + ' MB';
+	}
+
+	// arrayBufferToBase64 streams the buffer through String.fromCharCode in
+	// chunks. The naive one-shot apply() approach blows the JS argument-
+	// stack on multi-MB images in some browsers, so we batch.
+	function arrayBufferToBase64(buf) {
+		var bytes = new Uint8Array(buf);
+		var CHUNK = 0x8000;
+		var parts = [];
+		for (var i = 0; i < bytes.length; i += CHUNK) {
+			parts.push(String.fromCharCode.apply(
+				null, bytes.subarray(i, i + CHUNK)));
+		}
+		return btoa(parts.join(''));
+	}
+
+	function renderAttachmentStrip() {
+		attachmentStrip.innerHTML = '';
+		for (var i = 0; i < attachments.length; i++) {
+			(function(idx, a) {
+				var chip = document.createElement('span');
+				chip.className = 'attachment-chip';
+				chip.title = a.name + ' · ' + formatBytes(a.sizeBytes);
+				chip.dataset.mime = a.mimeType;
+
+				var thumb = document.createElement('img');
+				thumb.className = 'attachment-thumb';
+				thumb.src = a.objectUrl;
+				thumb.alt = '';
+				chip.appendChild(thumb);
+
+				var name = document.createElement('span');
+				name.className = 'attachment-name';
+				name.textContent = a.name;
+				chip.appendChild(name);
+
+				var size = document.createElement('span');
+				size.className = 'attachment-size';
+				size.textContent = formatBytes(a.sizeBytes);
+				chip.appendChild(size);
+
+				var rm = document.createElement('button');
+				rm.className = 'attachment-remove';
+				rm.type = 'button';
+				rm.setAttribute('aria-label', 'Remove ' + a.name);
+				rm.innerHTML = '&times;';
+				rm.addEventListener('click', function() { removeAttachment(idx); });
+				chip.appendChild(rm);
+
+				attachmentStrip.appendChild(chip);
+			})(i, attachments[i]);
+		}
+	}
+
+	function removeAttachment(idx) {
+		var a = attachments[idx];
+		if (a && a.objectUrl) URL.revokeObjectURL(a.objectUrl);
+		attachments.splice(idx, 1);
+		renderAttachmentStrip();
+	}
+
+	function addFiles(files) {
+		clearAttachError();
+		if (!files || files.length === 0) return;
+		var added = 0;
+		var rejections = [];
+		for (var i = 0; i < files.length; i++) {
+			var f = files[i];
+			if (attachments.length >= MAX_ATTACHMENT_COUNT) {
+				rejections.push('attachment limit (' + MAX_ATTACHMENT_COUNT + ') reached');
+				break;
+			}
+			var mime = (f.type || '').toLowerCase();
+			if (!ALLOWED_ATTACHMENT_MIMES[mime]) {
+				rejections.push((f.name || 'file') + ': unsupported type (' + (f.type || 'unknown') + ')');
+				continue;
+			}
+			if (f.size > MAX_ATTACHMENT_BYTES) {
+				rejections.push((f.name || 'file') + ': too large (' + formatBytes(f.size) + ' > 10 MB)');
+				continue;
+			}
+			if (f.size === 0) {
+				rejections.push((f.name || 'file') + ': empty file');
+				continue;
+			}
+			added++;
+			// Capture both the File reference AND the validated mime in
+			// the IIFE — both are var-scoped to the loop, so a naked
+			// closure would race the next iteration and tag every chip
+			// with the loop's final mime.
+			(function(file, fileMime) {
+				var reader = new FileReader();
+				reader.onload = function() {
+					try {
+						var b64 = arrayBufferToBase64(reader.result);
+						attachments.push({
+							name: file.name || 'image',
+							mimeType: fileMime,
+							sizeBytes: file.size,
+							dataB64: b64,
+							objectUrl: URL.createObjectURL(file)
+						});
+						renderAttachmentStrip();
+						updateSendBtn();
+					} catch (e) {
+						setAttachError('Failed to read ' + (file.name || 'image') + ': ' + e.message);
+					}
+				};
+				reader.onerror = function() {
+					setAttachError('Failed to read ' + (file.name || 'image'));
+				};
+				reader.readAsArrayBuffer(file);
+			})(f, mime);
+		}
+		if (rejections.length > 0) {
+			setAttachError(rejections.join(' · '));
+		}
+		// Note: no immediate strip render — each FileReader.onload triggers
+		// one. That keeps chips appearing in load-completion order, which
+		// matches what users expect when several large files are queued.
+		if (added === 0 && rejections.length === 0) {
+			// Nothing accepted, nothing rejected — likely a directory drop.
+			setAttachError('No files attached');
+		}
+	}
+
+	attachBtn.addEventListener('click', function() { filePicker.click(); });
+	filePicker.addEventListener('change', function() {
+		addFiles(filePicker.files);
+		filePicker.value = ''; // allow re-selecting the same file
+	});
+
+	// Drag-drop on the input wrap. Listen on document so a drag anywhere
+	// toggles the highlight, but only accept drops over the wrap so the
+	// browser doesn't navigate away if the user misses the target.
+	var dragDepth = 0;
+	function hasFiles(e) {
+		if (!e.dataTransfer) return false;
+		var t = e.dataTransfer.types;
+		if (!t) return false;
+		for (var i = 0; i < t.length; i++) {
+			if (t[i] === 'Files') return true;
+		}
+		return false;
+	}
+	document.addEventListener('dragenter', function(e) {
+		if (!hasFiles(e)) return;
+		e.preventDefault();
+		dragDepth++;
+		inputAreaWrap.classList.add('drag-over');
+	});
+	document.addEventListener('dragleave', function(e) {
+		if (!hasFiles(e)) return;
+		dragDepth = Math.max(0, dragDepth - 1);
+		if (dragDepth === 0) inputAreaWrap.classList.remove('drag-over');
+	});
+	document.addEventListener('dragover', function(e) {
+		if (!hasFiles(e)) return;
+		e.preventDefault();
+		e.dataTransfer.dropEffect = 'copy';
+	});
+	document.addEventListener('drop', function(e) {
+		if (!hasFiles(e)) return;
+		e.preventDefault();
+		dragDepth = 0;
+		inputAreaWrap.classList.remove('drag-over');
+		addFiles(e.dataTransfer.files);
+	});
+
+	// Clipboard paste — pull image items out of the paste event.
+	inputEl.addEventListener('paste', function(e) {
+		var items = e.clipboardData && e.clipboardData.items;
+		if (!items) return;
+		var files = [];
+		for (var i = 0; i < items.length; i++) {
+			if (items[i].kind === 'file') {
+				var f = items[i].getAsFile();
+				if (f) files.push(f);
+			}
+		}
+		if (files.length > 0) {
+			e.preventDefault(); // suppress the file-name text the browser would otherwise paste
+			addFiles(files);
+		}
 	});
 
 	connect();
