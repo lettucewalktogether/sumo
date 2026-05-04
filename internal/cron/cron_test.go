@@ -81,6 +81,52 @@ func TestSchedulerRunNow(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not started")
 	})
+
+	// Per-job cooldown: a second RunNow call within runNowCooldown
+	// must be rejected to bound LLM-quota burn from a misbehaving
+	// or hostile caller. Cooldown is per-job — different jobs can
+	// fire concurrently, and a "not found" or "not started" error
+	// doesn't poison the rate-limit window.
+	t.Run("cooldown_blocks_rapid_resends", func(t *testing.T) {
+		var calls atomic.Int32
+		s := NewScheduler()
+		require.NoError(t, s.Add(Job{
+			Name: "rapid", Schedule: "1h", Prompt: "p",
+			AgentFn: func(ctx context.Context, prompt string) (string, error) {
+				calls.Add(1)
+				return "", nil
+			},
+		}))
+		s.Start(context.Background())
+		defer s.Stop()
+		// First call: accepted.
+		require.NoError(t, s.RunNow("rapid"))
+		// Second call < runNowCooldown later: rejected.
+		err := s.RunNow("rapid")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "rate-limited")
+		// Different job: not affected by the cooldown.
+		require.NoError(t, s.Add(Job{
+			Name: "other", Schedule: "1h", Prompt: "p",
+			AgentFn: func(ctx context.Context, prompt string) (string, error) { return "", nil },
+		}))
+		require.NoError(t, s.RunNow("other"))
+	})
+
+	t.Run("not_found_does_not_poison_cooldown", func(t *testing.T) {
+		s := NewScheduler()
+		s.Start(context.Background())
+		defer s.Stop()
+		// Failed call (job doesn't exist) must not seed the
+		// cooldown — otherwise creating the job and calling
+		// RunNow would be blocked.
+		_ = s.RunNow("ghost")
+		require.NoError(t, s.Add(Job{
+			Name: "ghost", Schedule: "1h", Prompt: "p",
+			AgentFn: func(ctx context.Context, prompt string) (string, error) { return "", nil },
+		}))
+		require.NoError(t, s.RunNow("ghost"))
+	})
 }
 
 func TestSchedulerInvalidSchedule(t *testing.T) {

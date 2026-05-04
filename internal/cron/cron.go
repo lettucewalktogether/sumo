@@ -33,20 +33,31 @@ type runningJob struct {
 	paused bool
 }
 
+// runNowCooldown is the minimum interval between two manual triggers
+// of the same job via RunNow. Without this, a misbehaving WebSocket
+// caller could fire jobs.runNow in a tight loop (the WS layer's per-
+// connection rate limiter still allows ~30/sec) and burn through LLM
+// API quota or local compute on duplicated work. 10 seconds is short
+// enough that a real human pressing the "Retry" button repeatedly
+// stays unblocked, long enough to absorb scripted abuse.
+const runNowCooldown = 10 * time.Second
+
 // Scheduler runs cron jobs at their configured intervals.
 type Scheduler struct {
-	mu      sync.Mutex
-	jobs    []Job
-	running map[string]*runningJob // keyed by job name
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	mu         sync.Mutex
+	jobs       []Job
+	running    map[string]*runningJob // keyed by job name
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	lastRunNow map[string]time.Time // job name → last manual RunNow trigger; used for cooldown
 }
 
 // NewScheduler creates a new cron scheduler.
 func NewScheduler() *Scheduler {
 	return &Scheduler{
-		running: make(map[string]*runningJob),
+		running:    make(map[string]*runningJob),
+		lastRunNow: make(map[string]time.Time),
 	}
 }
 
@@ -297,15 +308,28 @@ func (s *Scheduler) RunNow(name string) error {
 			break
 		}
 	}
-	ctx := s.ctx
-	s.mu.Unlock()
-
 	if !found {
+		s.mu.Unlock()
 		return fmt.Errorf("cron job %q not found", name)
 	}
-	if ctx == nil {
+	if s.ctx == nil {
+		s.mu.Unlock()
 		return fmt.Errorf("cron scheduler not started")
 	}
+	// Per-job cooldown — checked AFTER validity so a "not found" or
+	// "not started" call doesn't poison the rate-limit window. Only
+	// successful spawns count toward the cooldown.
+	now := time.Now()
+	if last, ok := s.lastRunNow[name]; ok {
+		if elapsed := now.Sub(last); elapsed < runNowCooldown {
+			s.mu.Unlock()
+			return fmt.Errorf("run-now on %q is rate-limited; try again in %s",
+				name, (runNowCooldown - elapsed).Round(time.Second))
+		}
+	}
+	s.lastRunNow[name] = now
+	ctx := s.ctx
+	s.mu.Unlock()
 
 	go func() {
 		slog.Info("cron job running (off-cycle)", "name", job.Name, "trigger", "run_now")
