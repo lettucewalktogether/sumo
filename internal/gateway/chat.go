@@ -592,6 +592,23 @@ html.light #header .logo {
 	flex-shrink: 0;
 	background: var(--bg);
 }
+.attachment-glyph {
+	width: 32px; height: 32px;
+	border-radius: 4px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 0.6rem;
+	font-weight: 700;
+	letter-spacing: 0.03em;
+	flex-shrink: 0;
+	background: var(--bg);
+	color: var(--accent2);
+	border: 1px solid var(--border);
+	text-transform: uppercase;
+}
+.attachment-glyph[data-kind="doc"]  { color: var(--accent); }
+.attachment-glyph[data-kind="text"] { color: var(--text-em); }
 .attachment-name {
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -652,6 +669,17 @@ html.light #header .logo {
 	border: 1px solid var(--border);
 	display: block;
 }
+.user-attachment-pill {
+	display: inline-block;
+	padding: 0.2rem 0.55rem;
+	border-radius: 999px;
+	background: var(--bg-input);
+	border: 1px solid var(--border);
+	font-size: 0.75rem;
+	color: var(--text-em);
+}
+.user-attachment-pill[data-kind="doc"]  { color: var(--accent); }
+.user-attachment-pill[data-kind="text"] { color: var(--text-em); }
 #attach-error {
 	color: var(--error);
 	font-size: 0.75rem;
@@ -660,21 +688,241 @@ html.light #header .logo {
 	transition: min-height 0.15s;
 }
 #attach-error:empty { display: none; }
+
+/* ============================================================
+   Sidebar + main layout — sessions on the left like ChatGPT /
+   Claude.ai. Header lives inside #main-pane and decompresses to
+   per-conversation controls only.
+   ============================================================ */
+#layout {
+	display: flex;
+	flex-direction: row;
+	flex: 1;
+	min-height: 0;
+}
+#sidebar {
+	width: 260px;
+	flex-shrink: 0;
+	background: var(--bg-header);
+	border-right: 1px solid var(--border);
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	transition: width 0.18s ease, border-right-color 0.3s, background 0.3s;
+}
+#sidebar.collapsed { width: 0; border-right-width: 0; }
+#sidebar.collapsed > * { display: none; }
+#sidebar-header {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.75rem 0.9rem;
+	border-bottom: 1px solid var(--border);
+	flex-shrink: 0;
+}
+#sidebar-brand {
+	font-size: 1.05rem;
+	font-weight: 600;
+	color: var(--accent);
+	flex: 1;
+}
+#new-chat-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.45rem;
+	margin: 0.6rem 0.6rem 0.4rem;
+	padding: 0.55rem 0.8rem;
+	background: var(--bg-input);
+	color: var(--text);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	font-size: 0.85rem;
+	font-weight: 500;
+	cursor: pointer;
+	transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+#new-chat-btn:hover { border-color: var(--accent); color: var(--accent); }
+#new-chat-btn .plus { font-size: 1.05rem; line-height: 1; }
+#session-list {
+	flex: 1;
+	overflow-y: auto;
+	padding: 0.2rem 0.4rem 0.6rem;
+	min-height: 0;
+}
+#session-list::-webkit-scrollbar { width: 6px; }
+#session-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.session-group-label {
+	font-size: 0.65rem;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+	padding: 0.7rem 0.6rem 0.25rem;
+}
+.session-row {
+	display: block;
+	width: 100%%;
+	text-align: left;
+	background: none;
+	border: none;
+	border-radius: 6px;
+	padding: 0.45rem 0.6rem;
+	color: var(--text-em);
+	font-size: 0.83rem;
+	font-family: inherit;
+	cursor: pointer;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	transition: background 0.15s, color 0.15s;
+}
+.session-row:hover { background: var(--bg-input); color: var(--text); }
+.session-row.active {
+	background: var(--bg-input);
+	color: var(--accent);
+}
+.session-row .session-meta {
+	display: block;
+	font-size: 0.7rem;
+	color: var(--text-muted);
+	margin-top: 0.1rem;
+}
+#session-list-empty {
+	color: var(--text-muted);
+	font-size: 0.8rem;
+	padding: 0.7rem 0.6rem;
+	font-style: italic;
+}
+#sidebar-footer {
+	padding: 0.5rem 0.7rem 0.6rem;
+	border-top: 1px solid var(--border);
+	flex-shrink: 0;
+}
+#sidebar-footer #token-chip {
+	display: block;
+	width: 100%%;
+	box-sizing: border-box;
+	font-size: 0.72rem;
+	text-align: center;
+	padding: 0.3rem 0.5rem;
+	cursor: help;
+}
+#sidebar-toggle {
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 0.3rem 0.5rem;
+	cursor: pointer;
+	font-size: 1rem;
+	line-height: 1;
+	color: var(--text);
+	transition: border-color 0.3s;
+}
+#sidebar-toggle:hover { border-color: var(--accent); }
+#main-pane {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+/* The main pane needs an explicit min-height:0 too so flex-shrinking
+   the messages area works on Safari (which otherwise refuses to
+   shrink below content size). */
+#messages-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	height: 100%%;
+	color: var(--text-muted);
+	font-size: 0.95rem;
+	text-align: center;
+	padding: 2rem;
+	gap: 0.5rem;
+}
+#messages-empty .empty-title {
+	font-size: 1.1rem;
+	font-weight: 600;
+	color: var(--text);
+}
+#messages-empty .empty-hint {
+	font-size: 0.85rem;
+	max-width: 28rem;
+	line-height: 1.4;
+}
+#messages.has-messages #messages-empty { display: none; }
+/* Connection-status pill — colored dot + label, replaces the
+   plain "disconnected" text. */
+#conn-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.35rem;
+	font-size: 0.72rem;
+	color: var(--text-muted);
+	padding: 0.2rem 0.5rem;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	white-space: nowrap;
+}
+#conn-status::before {
+	content: "";
+	display: inline-block;
+	width: 7px; height: 7px;
+	border-radius: 50%%;
+	background: var(--text-muted);
+}
+#conn-status.connected { color: var(--accent); border-color: var(--accent); }
+#conn-status.connected::before { background: var(--accent); }
+#conn-status.error { color: var(--error); border-color: var(--error); }
+#conn-status.error::before { background: var(--error); }
+#conn-status.connecting::before { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse {
+	0%%, 100%% { opacity: 0.4; }
+	50%%       { opacity: 1.0; }
+}
+/* Narrow viewport: collapse the sidebar by default; hamburger
+   toggle in the header reveals it as an overlay rather than
+   shrinking the main pane. */
+@media (max-width: 700px) {
+	#sidebar:not(.open) { width: 0; border-right-width: 0; }
+	#sidebar:not(.open) > * { display: none; }
+	#sidebar.open {
+		position: absolute;
+		top: 0; bottom: 0; left: 0;
+		width: 80vw;
+		max-width: 320px;
+		z-index: 50;
+		box-shadow: 0 0 24px rgba(0,0,0,0.3);
+	}
+}
 </style>
 </head>
 <body>
+<div id="layout">
+<aside id="sidebar">
+	<div id="sidebar-header">
+		<span id="sidebar-brand">Felix</span>
+	</div>
+	<button id="new-chat-btn" type="button" title="Start a new conversation"><span class="plus">+</span> New chat</button>
+	<div id="session-list" aria-label="Conversations">
+		<div id="session-list-empty">No conversations yet.</div>
+	</div>
+	<div id="sidebar-footer">
+		<span id="token-chip" title="Tokens used / context window">—</span>
+	</div>
+</aside>
+<main id="main-pane">
 <div id="header">
-	<h1>Felix</h1>
+	<button id="sidebar-toggle" type="button" title="Toggle sidebar" aria-label="Toggle sidebar">&#9776;</button>
 	<select id="agent-select" title="Select agent"></select>
-	<select id="session-select" title="Select session"></select>
-	<button id="new-session-btn" title="New session">+ New</button>
 	<span class="spacer"></span>
-	<span id="token-chip" title="Tokens used / context window">—</span>
 	<button id="toggle-tools-btn" title="Hide/show tool calls">Tools</button>
 	<button id="toggle-trace-btn" title="Hide/show live trace panel">Trace</button>
 	<button id="clear-btn" title="Clear session">Clear</button>
-	<button id="theme-btn" title="Toggle light/dark mode">&#9790;</button>
-	<span class="status" id="conn-status">connecting...</span>
+	<button id="theme-btn" title="Toggle light/dark mode" aria-label="Toggle theme">&#9790;</button>
+	<span id="conn-status" class="connecting">connecting</span>
 </div>
 <div id="bootstrap-banner">
 	<div class="bb-header">
@@ -683,7 +931,12 @@ html.light #header .logo {
 	</div>
 	<div class="bb-models" id="bb-models"></div>
 </div>
-<div id="messages"></div>
+<div id="messages">
+	<div id="messages-empty">
+		<div class="empty-title">Start a conversation</div>
+		<div class="empty-hint">Type a message below, drop a file onto the window, or paste an image from the clipboard. Conversations save automatically and appear in the sidebar.</div>
+	</div>
+</div>
 <div id="trace-panel" style="display:none;">
 	<div id="trace-header"><span id="trace-title">Live trace</span><button id="trace-clear-btn" title="Clear trace">clear</button></div>
 	<div id="trace-list"></div>
@@ -692,12 +945,14 @@ html.light #header .logo {
 	<div id="attach-error" aria-live="polite"></div>
 	<div id="attachment-strip" aria-label="Attached files"></div>
 	<div id="input-area">
-		<textarea id="input" rows="1" placeholder="Type a message or drop an image..." autofocus></textarea>
-		<button id="attach-btn" type="button" title="Attach image (jpg, png, gif, webp, bmp · max 10 MB)" aria-label="Attach image">+</button>
-		<input id="file-picker" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/bmp" multiple style="display:none">
+		<button id="attach-btn" type="button" title="Attach an image, document, or text file" aria-label="Attach file">+</button>
+		<input id="file-picker" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/bmp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/*,application/json,application/xml,application/x-yaml,application/yaml,application/javascript,application/x-sh,.md,.txt,.csv,.json,.yaml,.yml,.xml,.html,.css,.js,.ts,.go,.py,.rb,.rs,.toml,.sql,.sh,.log" multiple style="display:none">
+		<textarea id="input" rows="1" placeholder="Type a message or drop a file..." dir="auto" lang="" autocapitalize="off" autocorrect="off" spellcheck="true" autofocus></textarea>
 		<button id="send-btn" disabled>Send</button>
 		<button id="stop-btn">Stop</button>
 	</div>
+</div>
+</main>
 </div>
 
 <script>
@@ -713,8 +968,20 @@ html.light #header .logo {
 	var clearBtn = document.getElementById('clear-btn');
 	var stopBtn = document.getElementById('stop-btn');
 	var agentSelect = document.getElementById('agent-select');
-	var sessionSelect = document.getElementById('session-select');
-	var newSessionBtn = document.getElementById('new-session-btn');
+	var newChatBtn = document.getElementById('new-chat-btn');
+	var sessionListEl = document.getElementById('session-list');
+	var sessionListEmptyEl = document.getElementById('session-list-empty');
+	var sidebarEl = document.getElementById('sidebar');
+	var sidebarToggleBtn = document.getElementById('sidebar-toggle');
+
+	// Active conversation tracking — the session-select dropdown went
+	// away with the sidebar redesign, so we keep the active session key
+	// here in JS (kept in lock-step with what the server thinks via
+	// session.switch) and read it from the rendered .active row.
+	var activeSessionKey = '';
+	// Last-seen session list, kept so re-renders (after a window switch
+	// or new-chat creation) can repaint without a round-trip.
+	var sessionsCache = [];
 	var toggleToolsBtn = document.getElementById('toggle-tools-btn');
 	var inputAreaWrap = document.getElementById('input-area-wrap');
 	var attachBtn = document.getElementById('attach-btn');
@@ -723,14 +990,72 @@ html.light #header .logo {
 	var attachErrorEl = document.getElementById('attach-error');
 
 	// Attachment limits — must match decodeChatAttachments in websocket.go.
-	var MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+	var MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+	var MAX_DOC_BYTES = 25 * 1024 * 1024;
 	var MAX_ATTACHMENT_COUNT = 20;
-	var ALLOWED_ATTACHMENT_MIMES = {
+	var ALLOWED_IMAGE_MIMES = {
 		'image/jpeg': true, 'image/png': true, 'image/gif': true,
 		'image/webp': true, 'image/bmp': true
 	};
+	// MIMEs the server will UTF-8 decode directly. Anything matching
+	// the text/ prefix is also accepted, alongside this set.
+	var ALLOWED_TEXT_MIMES = {
+		'application/json': true, 'application/xml': true,
+		'application/x-yaml': true, 'application/yaml': true,
+		'application/javascript': true, 'application/x-javascript': true,
+		'application/x-typescript': true, 'application/typescript': true,
+		'application/x-python': true, 'application/x-shellscript': true,
+		'application/x-sh': true, 'application/x-ruby': true,
+		'application/x-go': true, 'application/x-rust': true,
+		'application/x-toml': true, 'application/toml': true,
+		'application/sql': true, 'application/x-sql': true,
+		'application/x-tex': true
+	};
+	// MIMEs the server extracts via shell tools (pdftotext, pandoc).
+	var ALLOWED_DOC_MIMES = {
+		'application/pdf': true,
+		'application/vnd.openxmlformats-officedocument.wordprocessingml.document': true
+	};
+	// Browsers leave .md / unusual extensions with empty type. Map a
+	// few common text-ish extensions to a canonical MIME so the server
+	// allowlist (and the chip kind classifier) accept them.
+	var EXT_MIME_FALLBACK = {
+		md: 'text/markdown', markdown: 'text/markdown',
+		txt: 'text/plain', log: 'text/plain',
+		csv: 'text/csv',
+		yaml: 'application/x-yaml', yml: 'application/x-yaml',
+		toml: 'application/toml',
+		json: 'application/json',
+		xml: 'application/xml',
+		html: 'text/html', htm: 'text/html', css: 'text/css',
+		js: 'application/javascript', mjs: 'application/javascript',
+		ts: 'application/x-typescript', tsx: 'application/x-typescript',
+		py: 'application/x-python',
+		sh: 'application/x-sh', bash: 'application/x-sh',
+		rb: 'application/x-ruby', go: 'application/x-go',
+		rs: 'application/x-rust', sql: 'application/sql',
+		tex: 'application/x-tex'
+	};
+	function detectMime(file) {
+		var t = (file.type || '').toLowerCase();
+		if (t) return t;
+		var name = (file.name || '').toLowerCase();
+		var dot = name.lastIndexOf('.');
+		if (dot < 0) return '';
+		return EXT_MIME_FALLBACK[name.slice(dot + 1)] || '';
+	}
+	function isImageMime(m)    { return ALLOWED_IMAGE_MIMES[m] === true; }
+	function isPlainTextMime(m){ return m.indexOf('text/') === 0 || ALLOWED_TEXT_MIMES[m] === true; }
+	function isDocMime(m)      { return ALLOWED_DOC_MIMES[m] === true; }
+	function isAllowedMime(m)  { return isImageMime(m) || isPlainTextMime(m) || isDocMime(m); }
+	function attachmentKind(m) {
+		if (isImageMime(m)) return 'image';
+		if (isDocMime(m)) return 'doc';
+		if (isPlainTextMime(m)) return 'text';
+		return 'other';
+	}
 	// Pending attachments for the next chat.send.
-	// Each entry: { name, mimeType, sizeBytes, dataB64, objectUrl }.
+	// Each entry: { name, mimeType, kind, sizeBytes, dataB64, objectUrl? }.
 	var attachments = [];
 	var attachErrorTimer = null;
 
@@ -913,11 +1238,15 @@ html.light #header .logo {
 			if (pct >= 80) tokenChip.classList.add('danger');
 			else if (pct >= 60) tokenChip.classList.add('warn');
 		} else {
-			// No turn data yet — show baseline so the user still sees
-			// the context window of the selected agent.
-			tokenChip.textContent = '—' +
-				(ctxWindow > 0 ? '/' + fmtTokens(ctxWindow) : '') +
-				'  +—';
+			// No turn data yet — show the cleanest baseline that still
+			// conveys what's known. With no window AND no turn, the
+			// chip just reads "—"; with a window known, show "—/200K"
+			// so the user has the context-room number even before
+			// their first message lands. The previous "—  +—" form
+			// was visual noise nobody could parse without the legend.
+			tokenChip.textContent = ctxWindow > 0
+				? '— / ' + fmtTokens(ctxWindow)
+				: '—';
 			tokenChip.title = ctxWindow > 0
 				? 'Context window: ' + ctxWindow + ' tokens (no turns yet)'
 				: 'Context window unknown';
@@ -1009,15 +1338,18 @@ html.light #header .logo {
 		tracePanel.scrollTop = tracePanel.scrollHeight;
 	}
 
-	// Theme toggle
+	// Theme toggle. The icon shows the mode you'd switch *to* — moon
+	// while in light mode, sun while in dark mode — so the meaning of
+	// a click is "press to enter the displayed mode" rather than
+	// "this is the mode you're in", which trips users up.
 	function setTheme(mode) {
 		if (mode === 'light') {
 			document.documentElement.classList.add('light');
-			themeBtn.innerHTML = '&#9728;';
+			themeBtn.innerHTML = '&#9790;'; // moon ☾
 			themeBtn.title = 'Switch to dark mode';
 		} else {
 			document.documentElement.classList.remove('light');
-			themeBtn.innerHTML = '&#9790;';
+			themeBtn.innerHTML = '&#9728;'; // sun ☀
 			themeBtn.title = 'Switch to light mode';
 		}
 		localStorage.setItem('felix-theme', mode);
@@ -1036,49 +1368,48 @@ html.light #header .logo {
 		ws.send(JSON.stringify({
 			jsonrpc: '2.0',
 			method: 'session.clear',
-			params: { agentId: agentSelect.value, sessionKey: sessionSelect.value },
+			params: { agentId: agentSelect.value, sessionKey: activeSessionKey },
 			id: 'clear'
 		}));
-		messagesEl.innerHTML = '';
-		currentAssistant = null;
-		toolEls = {};
+		clearMessagesPane();
 		resetTokenChip();
 		loadSessions();
 	});
 
 	agentSelect.addEventListener('change', function() {
-		messagesEl.innerHTML = '';
-		currentAssistant = null;
-		toolEls = {};
+		clearMessagesPane();
 		resetTokenChip();
 		if (!ws || ws.readyState !== WebSocket.OPEN) return;
 		// Load sessions for the new agent
 		loadSessions();
 	});
 
-	sessionSelect.addEventListener('change', function() {
+	function switchToSession(key) {
+		if (!key || key === activeSessionKey) return;
 		if (!ws || ws.readyState !== WebSocket.OPEN) return;
+		activeSessionKey = key;
+		// Repaint sidebar so the new active row highlights immediately,
+		// before the server confirms.
+		renderSessionList(sessionsCache);
 		ws.send(JSON.stringify({
 			jsonrpc: '2.0',
 			method: 'session.switch',
-			params: { agentId: agentSelect.value, sessionKey: sessionSelect.value },
+			params: { agentId: agentSelect.value, sessionKey: key },
 			id: 'session-switch'
 		}));
-		messagesEl.innerHTML = '';
-		currentAssistant = null;
-		toolEls = {};
+		clearMessagesPane();
 		resetTokenChip();
 		ws.send(JSON.stringify({
 			jsonrpc: '2.0',
 			method: 'session.history',
-			params: { agentId: agentSelect.value, sessionKey: sessionSelect.value },
+			params: { agentId: agentSelect.value, sessionKey: key },
 			id: 'history'
 		}));
-	});
+	}
 
-	newSessionBtn.addEventListener('click', function() {
+	newChatBtn.addEventListener('click', function() {
 		if (!ws || ws.readyState !== WebSocket.OPEN) return;
-		var name = prompt('Session name (leave empty for timestamp):');
+		var name = prompt('Conversation name (leave empty for a timestamp):');
 		if (name === null) return; // cancelled
 		ws.send(JSON.stringify({
 			jsonrpc: '2.0',
@@ -1086,6 +1417,26 @@ html.light #header .logo {
 			params: { agentId: agentSelect.value, name: name || '' },
 			id: 'session-new'
 		}));
+	});
+
+	// Sidebar collapse — persisted across reloads. On narrow viewports
+	// we use the .open class instead of relying on the persisted state,
+	// so an accidental collapse on desktop doesn't leave a phone user
+	// without sidebar access.
+	(function initSidebar() {
+		var collapsed = localStorage.getItem('felix-sidebar-collapsed') === 'true';
+		if (collapsed) sidebarEl.classList.add('collapsed');
+	})();
+	sidebarToggleBtn.addEventListener('click', function() {
+		// On narrow viewports, toggle the .open overlay state; on wider
+		// viewports, toggle the persistent .collapsed state.
+		var narrow = window.matchMedia('(max-width: 700px)').matches;
+		if (narrow) {
+			sidebarEl.classList.toggle('open');
+		} else {
+			var nowCollapsed = sidebarEl.classList.toggle('collapsed');
+			localStorage.setItem('felix-sidebar-collapsed', nowCollapsed ? 'true' : 'false');
+		}
 	});
 
 	function loadSessions() {
@@ -1096,6 +1447,105 @@ html.light #header .logo {
 			params: { agentId: agentSelect.value },
 			id: 'sessions'
 		}));
+	}
+
+	// Group sessions into the same time buckets ChatGPT/Claude.ai use:
+	// Today / Yesterday / Last 7 days / Last 30 days / Older. The
+	// server gives us lastActivity as a unix timestamp; bucket on the
+	// client so the labels stay locale-correct.
+	function bucketForSession(s) {
+		var now = new Date();
+		var startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+		var startOfYesterday = startOfToday - 86400;
+		var sevenDaysAgo = startOfToday - 6 * 86400;
+		var thirtyDaysAgo = startOfToday - 29 * 86400;
+		var t = Number(s.lastActivity || s.createdAt || 0);
+		if (t >= startOfToday)     return 'Today';
+		if (t >= startOfYesterday) return 'Yesterday';
+		if (t >= sevenDaysAgo)     return 'Last 7 days';
+		if (t >= thirtyDaysAgo)    return 'Last 30 days';
+		return 'Older';
+	}
+	var BUCKET_ORDER = ['Today', 'Yesterday', 'Last 7 days', 'Last 30 days', 'Older'];
+
+	// renderSessionList paints the sidebar list. Pass [] to render the
+	// empty-state placeholder. Active session is determined by the
+	// 'active' flag from the server, falling back to activeSessionKey
+	// when this client made an unconfirmed switch.
+	function renderSessionList(sessions) {
+		sessionsCache = sessions || [];
+		// Clear out previous rows but keep the empty placeholder element
+		// so we can show/hide rather than re-create it.
+		while (sessionListEl.firstChild &&
+				sessionListEl.firstChild.id !== 'session-list-empty') {
+			sessionListEl.removeChild(sessionListEl.firstChild);
+		}
+		if (sessions.length === 0) {
+			sessionListEmptyEl.style.display = '';
+			return;
+		}
+		sessionListEmptyEl.style.display = 'none';
+
+		// Latest first, then bucket.
+		var sorted = sessions.slice().sort(function(a, b) {
+			return Number(b.lastActivity || 0) - Number(a.lastActivity || 0);
+		});
+		var grouped = {};
+		for (var i = 0; i < sorted.length; i++) {
+			var b = bucketForSession(sorted[i]);
+			(grouped[b] = grouped[b] || []).push(sorted[i]);
+		}
+
+		var fragment = document.createDocumentFragment();
+		for (var g = 0; g < BUCKET_ORDER.length; g++) {
+			var label = BUCKET_ORDER[g];
+			var group = grouped[label];
+			if (!group || group.length === 0) continue;
+			var hdr = document.createElement('div');
+			hdr.className = 'session-group-label';
+			hdr.textContent = label;
+			fragment.appendChild(hdr);
+			for (var j = 0; j < group.length; j++) {
+				(function(s) {
+					var row = document.createElement('button');
+					row.type = 'button';
+					row.className = 'session-row';
+					// activeSessionKey is the single source of truth at
+					// render time. The server's s.active flag is used
+					// only to seed activeSessionKey in the session.list
+					// response handler. OR-ing here would let the
+					// cached server flag fight the optimistic local
+					// switch and leave two rows highlighted at once.
+					if (s.key === activeSessionKey) row.classList.add('active');
+					row.title = s.key;
+					row.textContent = s.key;
+					var meta = document.createElement('span');
+					meta.className = 'session-meta';
+					meta.textContent = (s.entryCount || 0) + ' message' +
+						(s.entryCount === 1 ? '' : 's');
+					row.appendChild(meta);
+					row.addEventListener('click', function() {
+						switchToSession(s.key);
+					});
+					fragment.appendChild(row);
+				})(group[j]);
+			}
+		}
+		sessionListEl.insertBefore(fragment, sessionListEmptyEl);
+	}
+
+	function clearMessagesPane() {
+		messagesEl.innerHTML = '';
+		messagesEl.classList.remove('has-messages');
+		// Re-insert the empty-state element so it re-shows when a
+		// session is freshly cleared.
+		var empty = document.createElement('div');
+		empty.id = 'messages-empty';
+		empty.innerHTML = '<div class="empty-title">Start a conversation</div>' +
+			'<div class="empty-hint">Type a message below, drop a file onto the window, or paste an image from the clipboard. Conversations save automatically and appear in the sidebar.</div>';
+		messagesEl.appendChild(empty);
+		currentAssistant = null;
+		toolEls = {};
 	}
 
 	var ws = null;
@@ -1284,7 +1734,8 @@ html.light #header .logo {
 		ws = new WebSocket(wsBase + '/ws');
 
 		ws.onopen = function() {
-			connStatus.textContent = 'connected';
+			connStatus.textContent = 'live';
+			connStatus.className = 'connected';
 			sendBtn.disabled = false;
 			if (reconnectTimer) {
 				clearTimeout(reconnectTimer);
@@ -1300,7 +1751,8 @@ html.light #header .logo {
 		};
 
 		ws.onclose = function() {
-			connStatus.textContent = 'disconnected';
+			connStatus.textContent = 'reconnecting';
+			connStatus.className = 'connecting';
 			sendBtn.disabled = true;
 			sending = false;
 			reconnectTimer = setTimeout(connect, 3000);
@@ -1308,6 +1760,7 @@ html.light #header .logo {
 
 		ws.onerror = function() {
 			connStatus.textContent = 'error';
+			connStatus.className = 'error';
 		};
 
 		ws.onmessage = function(e) {
@@ -1347,31 +1800,32 @@ html.light #header .logo {
 					return;
 				}
 
-				// Handle session.list response
+				// Handle session.list response — paint the sidebar list
+				// and (re)load history for whichever row is active.
 				if (resp.id === 'sessions') {
 					var sessions = resp.result.sessions || [];
-					sessionSelect.innerHTML = '';
+					// Pick the active key: server-side flag wins, else
+					// fall back to whatever this client last switched to,
+					// else first session, else the default key.
+					var nextActive = '';
 					for (var i = 0; i < sessions.length; i++) {
-						var opt = document.createElement('option');
-						opt.value = sessions[i].key;
-						opt.textContent = sessions[i].key + ' (' + sessions[i].entryCount + ')';
-						if (sessions[i].active) opt.selected = true;
-						sessionSelect.appendChild(opt);
+						if (sessions[i].active) { nextActive = sessions[i].key; break; }
 					}
-					if (sessions.length === 0) {
-						var opt = document.createElement('option');
-						opt.value = 'ws_default';
-						opt.textContent = 'ws_default (0)';
-						sessionSelect.appendChild(opt);
+					if (!nextActive && activeSessionKey) {
+						for (var i = 0; i < sessions.length; i++) {
+							if (sessions[i].key === activeSessionKey) { nextActive = activeSessionKey; break; }
+						}
 					}
+					if (!nextActive && sessions.length > 0) nextActive = sessions[0].key;
+					if (!nextActive) nextActive = 'ws_default';
+					activeSessionKey = nextActive;
+					renderSessionList(sessions);
 					// Load history for the active session
-					messagesEl.innerHTML = '';
-					currentAssistant = null;
-					toolEls = {};
+					clearMessagesPane();
 					ws.send(JSON.stringify({
 						jsonrpc: '2.0',
 						method: 'session.history',
-						params: { agentId: agentSelect.value, sessionKey: sessionSelect.value },
+						params: { agentId: agentSelect.value, sessionKey: activeSessionKey },
 						id: 'history'
 					}));
 					return;
@@ -1471,6 +1925,7 @@ html.light #header .logo {
 	}
 
 	function addUserMsg(text, atts) {
+		messagesEl.classList.add('has-messages');
 		var div = document.createElement('div');
 		div.className = 'msg user';
 		if (text) {
@@ -1482,14 +1937,38 @@ html.light #header .logo {
 			var strip = document.createElement('div');
 			strip.className = 'user-attachments';
 			for (var i = 0; i < atts.length; i++) {
-				var img = document.createElement('img');
-				// Prefer the live object URL (cheap, no re-encoding); fall
-				// back to a data: URL so historical replays still render
-				// even after the originating object URL is revoked.
-				img.src = atts[i].objectUrl ||
-					('data:' + atts[i].mimeType + ';base64,' + atts[i].dataB64);
-				img.alt = atts[i].name || 'attachment';
-				strip.appendChild(img);
+				var a = atts[i];
+				if (a.kind === 'image') {
+					var img = document.createElement('img');
+					// Prefer the live object URL (cheap, no re-encoding); fall
+					// back to a data: URL so historical replays still render
+					// even after the originating object URL is revoked.
+					img.src = a.objectUrl ||
+						('data:' + a.mimeType + ';base64,' + a.dataB64);
+					img.alt = a.name || 'attachment';
+					// Same broken-image fallback as the chip strip — if
+					// the bytes can't be decoded, render a labelled pill
+					// instead of leaving the browser's broken icon.
+					img.addEventListener('error', function() {
+						var pill = document.createElement('span');
+						pill.className = 'user-attachment-pill';
+						pill.dataset.kind = 'image';
+						pill.textContent = a.name || 'image';
+						pill.title = a.mimeType + ' · could not render preview';
+						img.replaceWith(pill);
+					});
+					strip.appendChild(img);
+				} else {
+					// Doc/text attachment — render as a non-removable mini chip
+					// so the user sees what was attached without re-encoding
+					// arbitrary bytes for inline display.
+					var pill = document.createElement('span');
+					pill.className = 'user-attachment-pill';
+					pill.dataset.kind = a.kind || 'other';
+					pill.textContent = a.name || 'attachment';
+					pill.title = a.mimeType + ' · ' + formatBytes(a.sizeBytes);
+					strip.appendChild(pill);
+				}
 			}
 			div.appendChild(strip);
 		}
@@ -1498,6 +1977,7 @@ html.light #header .logo {
 	}
 
 	function addAssistantMsg() {
+		messagesEl.classList.add('has-messages');
 		var div = document.createElement('div');
 		div.className = 'msg assistant';
 		var content = document.createElement('div');
@@ -1566,6 +2046,7 @@ html.light #header .logo {
 	}
 
 	function addToolCall(toolName, toolId, input) {
+		messagesEl.classList.add('has-messages');
 		var div = document.createElement('div');
 		div.className = 'tool-call';
 		var id = toolId || toolName;
@@ -1774,6 +2255,7 @@ html.light #header .logo {
 	}
 
 	function addError(msg) {
+		messagesEl.classList.add('has-messages');
 		var f = friendlyError(msg);
 		var div = document.createElement('div');
 		div.className = 'msg assistant';
@@ -1832,7 +2314,7 @@ html.light #header .logo {
 		var params = {
 			agentId: agentSelect.value,
 			text: text,
-			sessionKey: sessionSelect.value
+			sessionKey: activeSessionKey
 		};
 		if (sentAtts.length > 0) {
 			params.attachments = sentAtts.map(function(a) {
@@ -1867,11 +2349,27 @@ html.light #header .logo {
 		}));
 	});
 
+	// IME-aware Enter handling. While an Input Method Editor is composing
+	// a candidate (CJK/Vietnamese/Korean and similar), pressing Enter
+	// commits the candidate — it must not also send the message. We
+	// guard via two signals: the spec-level KeyboardEvent.isComposing,
+	// and a compositionstart/compositionend tracked flag for the
+	// browsers that don't set isComposing reliably (notably WebKit on
+	// some macOS versions). keyCode 229 is the legacy IME pre-edit
+	// fallback for the same case.
+	var imeComposing = false;
+	inputEl.addEventListener('compositionstart', function() { imeComposing = true; });
+	inputEl.addEventListener('compositionend', function() {
+		// Defer the unset by one frame so the Enter that committed the
+		// candidate is observed as "still composing" by the keydown
+		// listener below.
+		setTimeout(function() { imeComposing = false; }, 0);
+	});
 	inputEl.addEventListener('keydown', function(e) {
-		if (e.key === 'Enter' && !e.shiftKey) {
-			e.preventDefault();
-			sendMessage();
-		}
+		if (e.key !== 'Enter' || e.shiftKey) return;
+		if (e.isComposing || e.keyCode === 229 || imeComposing) return;
+		e.preventDefault();
+		sendMessage();
 	});
 
 	// Auto-resize textarea
@@ -1924,12 +2422,44 @@ html.light #header .logo {
 				chip.className = 'attachment-chip';
 				chip.title = a.name + ' · ' + formatBytes(a.sizeBytes);
 				chip.dataset.mime = a.mimeType;
+				chip.dataset.kind = a.kind || 'other';
 
-				var thumb = document.createElement('img');
-				thumb.className = 'attachment-thumb';
-				thumb.src = a.objectUrl;
-				thumb.alt = '';
-				chip.appendChild(thumb);
+				if (a.kind === 'image' && a.objectUrl) {
+					var thumb = document.createElement('img');
+					thumb.className = 'attachment-thumb';
+					thumb.src = a.objectUrl;
+					thumb.alt = '';
+					// If the bytes turn out to be unreadable as an image
+					// (corrupted upload, wrong MIME on a binary file),
+					// degrade gracefully to a generic IMG badge instead
+					// of leaving the browser's broken-image glyph in
+					// place.
+					thumb.addEventListener('error', function() {
+						var glyph = document.createElement('span');
+						glyph.className = 'attachment-glyph';
+						glyph.dataset.kind = 'image';
+						glyph.textContent = 'IMG';
+						thumb.replaceWith(glyph);
+					});
+					chip.appendChild(thumb);
+				} else {
+					// Generic file glyph — a small badge rather than a
+					// raster thumbnail. Carries the kind so CSS can tint
+					// per type (PDF / text / etc.).
+					var glyph = document.createElement('span');
+					glyph.className = 'attachment-glyph';
+					glyph.dataset.kind = a.kind || 'other';
+					var label;
+					if (a.kind === 'doc') {
+						label = a.mimeType === 'application/pdf' ? 'PDF' : 'DOC';
+					} else if (a.kind === 'text') {
+						label = 'TXT';
+					} else {
+						label = 'FILE';
+					}
+					glyph.textContent = label;
+					chip.appendChild(glyph);
+				}
 
 				var name = document.createElement('span');
 				name.className = 'attachment-name';
@@ -1972,13 +2502,15 @@ html.light #header .logo {
 				rejections.push('attachment limit (' + MAX_ATTACHMENT_COUNT + ') reached');
 				break;
 			}
-			var mime = (f.type || '').toLowerCase();
-			if (!ALLOWED_ATTACHMENT_MIMES[mime]) {
+			var mime = detectMime(f);
+			if (!isAllowedMime(mime)) {
 				rejections.push((f.name || 'file') + ': unsupported type (' + (f.type || 'unknown') + ')');
 				continue;
 			}
-			if (f.size > MAX_ATTACHMENT_BYTES) {
-				rejections.push((f.name || 'file') + ': too large (' + formatBytes(f.size) + ' > 10 MB)');
+			var kind = attachmentKind(mime);
+			var cap = (kind === 'image') ? MAX_IMAGE_BYTES : MAX_DOC_BYTES;
+			if (f.size > cap) {
+				rejections.push((f.name || 'file') + ': too large (' + formatBytes(f.size) + ' > ' + formatBytes(cap) + ')');
 				continue;
 			}
 			if (f.size === 0) {
@@ -1986,33 +2518,40 @@ html.light #header .logo {
 				continue;
 			}
 			added++;
-			// Capture both the File reference AND the validated mime in
-			// the IIFE — both are var-scoped to the loop, so a naked
+			// Capture both the File reference AND the validated mime/kind
+			// in the IIFE — both are var-scoped to the loop, so a naked
 			// closure would race the next iteration and tag every chip
-			// with the loop's final mime.
-			(function(file, fileMime) {
+			// with the loop's final values.
+			(function(file, fileMime, fileKind) {
 				var reader = new FileReader();
 				reader.onload = function() {
 					try {
 						var b64 = arrayBufferToBase64(reader.result);
-						attachments.push({
-							name: file.name || 'image',
+						var entry = {
+							name: file.name || 'attachment',
 							mimeType: fileMime,
+							kind: fileKind,
 							sizeBytes: file.size,
-							dataB64: b64,
-							objectUrl: URL.createObjectURL(file)
-						});
+							dataB64: b64
+						};
+						// Only image attachments need a thumbnail blob URL —
+						// docs and text get a generic glyph instead, which
+						// avoids spawning a blob URL per text upload.
+						if (fileKind === 'image') {
+							entry.objectUrl = URL.createObjectURL(file);
+						}
+						attachments.push(entry);
 						renderAttachmentStrip();
 						updateSendBtn();
 					} catch (e) {
-						setAttachError('Failed to read ' + (file.name || 'image') + ': ' + e.message);
+						setAttachError('Failed to read ' + (file.name || 'file') + ': ' + e.message);
 					}
 				};
 				reader.onerror = function() {
-					setAttachError('Failed to read ' + (file.name || 'image'));
+					setAttachError('Failed to read ' + (file.name || 'file'));
 				};
 				reader.readAsArrayBuffer(file);
-			})(f, mime);
+			})(f, mime, kind);
 		}
 		if (rejections.length > 0) {
 			setAttachError(rejections.join(' · '));

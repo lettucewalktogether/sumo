@@ -39,7 +39,8 @@ Felix connects you (via CLI or web chat) to LLMs — Claude, GPT, Gemini, Qwen, 
 - Multiple agents per install, each with its own model, workspace, persona, and tool policy.
 - Subagents invocable via the `task` tool, so a supervisor can delegate to a specialist with a different model.
 - Per-agent allow/deny lists for every built-in and MCP-provided tool.
-- Vision: paste image paths in the CLI or drop them in web chat; bytes go straight to the model.
+- Multi-modal input: drag, drop, paste, or pick **images** (jpg, png, gif, webp, bmp), **PDFs**, **Word docs**, and **plain-text / source files** in the web chat. Images go straight to the model as native vision input; PDFs and DOCX are extracted server-side via `pdftotext` / `pandoc`; text files are inlined as fenced blocks. The CLI accepts image paths via the same `felix chat` prompt — see `## Web chat attachments` below.
+- Multilingual chat: textarea respects per-paragraph direction (`dir="auto"` — Arabic, Hebrew, mixed-script work); IME-safe Enter (CJK/Vietnamese/Korean composition candidates commit cleanly without firing the message); attached text files are decoded BOM-aware (UTF-8, UTF-16 LE/BE with or without BOM, falls through to a clear "save as UTF-8" hint for legacy encodings).
 - Cron jobs: recurring prompts on configurable intervals, with pause/resume/remove management.
 - MCP client: Streamable-HTTP and stdio transports, OAuth2 (client credentials, authorization code + PKCE) and bearer auth, in-chat re-authentication, per-server circuit breaker.
 
@@ -142,9 +143,69 @@ Menu: **Chat**, **Jobs**, **Logs**, **Settings**, **Restart**, **Quit**.
 
 The Settings page has tabs for Agents, Providers, Models, Intelligence, Security, Messaging, MCP, Skills, Memory, and Gateway — most things you'd otherwise edit in `felix.json5` are reachable here.
 
-**Web chat** at `/chat`: agent + session selectors, streaming responses, light/dark toggle, inline tool-call display with collapsible output, inline "Re-authenticate" button when an MCP token expires, live trace panel.
+**Web chat** at `/chat`: ChatGPT/Claude-style layout with a left **sidebar** listing your conversations grouped by recency (Today / Yesterday / Last 7 days / Last 30 days / Older) — click a row to switch, **+ New chat** at the top to spawn one, hamburger toggle to collapse the sidebar entirely on desktop or slide it in as an overlay on narrow viewports. Main pane has agent picker, streaming responses, light/dark toggle, inline tool-call display with collapsible output, inline "Re-authenticate" button when an MCP token expires, live trace panel, multi-modal attachments (see below), connection-status pill (●live / ●reconnecting / ●error), and a token-usage chip in the sidebar footer.
 
 **Environment variables.** macOS `.app` bundles don't inherit shell environment variables; Felix.app loads `~/.zshrc` / `~/.bashrc` at startup, so `export ANTHROPIC_API_KEY=...` works. On Windows, set via System Settings or PowerShell `[System.Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY","sk-ant-...","User")`. Either way, you can put keys directly in `felix.json5` instead.
+
+
+
+## Web chat layout
+
+The web chat at `http://127.0.0.1:18789/chat` follows the conventional ChatGPT / Claude.ai layout:
+
+- **Sidebar (left, 260 px):** brand at the top, a **+ New chat** button, then the conversation list grouped by recency — **Today**, **Yesterday**, **Last 7 days**, **Last 30 days**, **Older**. Clicking a row switches to that conversation and reloads its history; the active row is tinted with the accent colour. The sidebar footer shows the **token-usage chip** for the active turn so it doesn't crowd the header.
+- **Main pane (right):** a slim header with the sidebar toggle (☰), agent picker, **Tools / Trace / Clear / theme** toggles, and a connection-status pill (●live, ●reconnecting, ●error). Below the header sit the messages, the live trace panel (when toggled on), and the input bar.
+- **Empty state:** before the first turn the messages pane shows a "Start a conversation" hint pointing at the input bar and the attach button — no blank space staring back at the user.
+- **Sidebar collapse:** desktop users can click ☰ to fully hide the sidebar and reclaim the width (state persists across reloads via `localStorage`). On narrow viewports (≤ 700 px) the sidebar starts hidden and slides in as an overlay when ☰ is tapped.
+
+## Web chat attachments
+
+The web chat accepts files three ways: click the **+** button at the left edge of the input bar, drag and drop anywhere on the chat window, or paste a file or image from the clipboard. Up to **20 attachments per message**, with chips above the textarea showing each file's name, size, and either a thumbnail (decodable images) or a kind badge (**PDF** / **DOC** / **TXT** / **IMG**). Click the × on any chip to remove it before sending; the input area highlights green during a drag.
+
+Image bytes that can't be decoded (corrupted upload, wrong MIME on a binary file) gracefully fall back to the **IMG** badge in the chip and a labelled pill in the user-message bubble — no broken-image icons. Attachments themselves are *not* persisted in session history (the on-disk format intentionally omits inline binary data), so reloading a past session shows the conversation text but not the inline thumbnails — re-attach if you want the images visible again in the bubble.
+
+### Supported file types
+
+| Kind | Examples | Server handling | Per-file cap |
+|------|----------|-----------------|--------------|
+| **Images** | `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp` | Sent as native vision input to the model — same path as the CLI's image-attachment flow. | 10 MiB |
+| **PDFs** | `.pdf` | Extracted to plain text server-side via `pdftotext -layout -enc UTF-8` and inlined into the user message as a fenced block. | 25 MiB input, 256 KiB extracted |
+| **Word docs** | `.docx` | Extracted via `pandoc -f docx -t plain --wrap=none` and inlined as a fenced block. | 25 MiB input, 256 KiB extracted |
+| **Plain text & code** | `.txt`, `.md`, `.markdown`, `.csv`, `.json`, `.yaml`, `.yml`, `.toml`, `.xml`, `.html`, `.htm`, `.css`, `.js`, `.mjs`, `.ts`, `.tsx`, `.go`, `.py`, `.rb`, `.rs`, `.sql`, `.sh`, `.bash`, `.tex`, `.log`, plus any `text/*` MIME | UTF-8 decoded directly; UTF-8/UTF-16 BOM stripped or transcoded; BOM-less UTF-16 detected via byte-parity heuristic; legacy single-byte encodings (Latin-1, GBK, Shift-JIS) rejected with a "save as UTF-8" hint. | 25 MiB input, 256 KiB extracted |
+
+PDFs and Word docs need the matching binary on `$PATH` — `brew install poppler` for `pdftotext`, `brew install pandoc` for DOCX (or `apt install poppler-utils pandoc` on Debian/Ubuntu). If a binary is missing, the chat surfaces a one-line error like `pdftotext not found on PATH (install poppler …)` instead of swallowing the upload.
+
+### How extracted content reaches the model
+
+Image attachments flow through the runtime's existing multimodal pipeline (`llm.ImageContent`) and are sent to the model as native vision input — Anthropic, OpenAI (`gpt-4o`-class), and Gemini providers all accept this. Document attachments are converted to plain text server-side and appended to the user message as fenced blocks:
+
+```
+<user's typed text>
+
+--- attached: report.pdf ---
+<extracted text>
+--- end ---
+
+--- attached: notes.md ---
+<file body>
+--- end ---
+```
+
+The 256 KiB output cap per attachment keeps the prompt finite even on hostile input — anything past that gets truncated with a `[... truncated]` marker. For larger documents, drop the file into the agent's workspace and ask it to read with the `read_file` tool instead, so the agent can chunk and search rather than slurping the whole thing into one prompt.
+
+### Multilingual input
+
+The textarea sets `dir="auto"`, which the browser resolves per-paragraph from the first strong-directional character in each line — so Arabic and Hebrew lines flow right-to-left, English lines stay left-to-right, and a mixed-script message gets each paragraph oriented correctly without any user toggling. Enter sends the message *except* while an IME is composing — the handler tracks `compositionstart` / `compositionend` and skips the send when `KeyboardEvent.isComposing` (or the legacy `keyCode === 229`) is true, so CJK, Vietnamese, and Korean candidate-commit Enter no longer fires the message prematurely. Attached text files decode with BOM detection (UTF-8 BOM stripped; UTF-16 LE/BE with or without BOM transcoded to UTF-8 via `golang.org/x/text/encoding/unicode`); legacy single-byte encodings are rejected with a clear hint rather than silently mangled.
+
+The chat surface itself is model-neutral — pick whichever provider speaks the languages you care about. Frontier models (Claude, GPT, Gemini) handle most major languages well; for **Southeast Asian languages** (Bahasa Indonesia, Malay, Thai, Vietnamese, Tamil, Filipino, Singlish, regional variants) [SEA-LION](https://sea-lion.ai/) from AI Singapore is purpose-built and plugs in via the `openai-compatible` provider — see the SEA-LION block in **LLM providers › Per-provider setup** below.
+
+### Pure-attachment messages
+
+If you attach a file without typing any text, the gateway substitutes a sensible default prompt so providers always see a non-empty user turn:
+
+- Image-only message: `What's in this image?`
+- Document-only message: `Please review the attached document.`
+- Mixed images + docs: `Please review the attached files.`
 
 
 
@@ -190,7 +251,7 @@ Felix supports multiple providers simultaneously. Each is defined in the `provid
 | `openai` | OpenAI's native API | GPT models |
 | `gemini` | Google's native Gemini SDK | Gemini models |
 | `qwen` | Alibaba Cloud DashScope | Qwen models |
-| `openai-compatible` | Anything implementing `/v1/chat/completions` | Ollama, LM Studio, DeepSeek, LiteLLM, vLLM |
+| `openai-compatible` | Anything implementing `/v1/chat/completions` | Ollama, LM Studio, DeepSeek, [SEA-LION](https://sea-lion.ai/), LiteLLM, vLLM |
 | `local` | Bundled Ollama supervised by Felix | Fully offline / no API key |
 
 ### Per-provider setup
@@ -226,6 +287,23 @@ Felix supports multiple providers simultaneously. Each is defined in the `provid
   "base_url": "https://api.deepseek.com/v1"
 }
 // Models: deepseek-chat, deepseek-coder, deepseek-reasoner
+
+// SEA-LION (AI Singapore) — open-source LLMs purpose-built for
+// Southeast Asian languages: Bahasa Indonesia, Malay, Thai, Vietnamese,
+// Tamil, Filipino, plus Singlish and other regional variants. Get a key
+// at https://playground.sea-lion.ai/key-manager
+"sealion": {
+  "kind": "openai-compatible",
+  "api_key": "sl-...",
+  "base_url": "https://api.sea-lion.ai/v1"
+}
+// Models (note the aisingapore/ prefix is part of the model id, not a
+// second provider — felix splits provider/model only on the first slash):
+//   aisingapore/Gemma-SEA-LION-v4-27B-IT   — Gemma-3-based instruct (128k window)
+//   aisingapore/Llama-SEA-LION-v3.5-70B-R  — Llama-3-based reasoning  (128k window)
+// Reference as: sealion/aisingapore/Gemma-SEA-LION-v4-27B-IT
+// Public API rate limit is 10 requests/min/user as of writing; email
+// sealion@aisingapore.org for higher limits.
 
 // Bundled Ollama (wired up automatically by `felix onboard`)
 "local": { "kind": "local", "base_url": "http://127.0.0.1:18790/v1" }

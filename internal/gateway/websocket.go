@@ -298,17 +298,22 @@ type chatAttachmentParam struct {
 	Name     string `json:"name,omitempty"`
 }
 
-// Limits matched to the CLI's image-attachment behaviour (cmd/felix/main.go
-// tryReadImage). 10 MiB per image, with a per-message count cap to bound
-// the WebSocket frame size and keep providers from rejecting the request.
+// Image-attachment caps. Image input bytes are capped at the same 10 MiB
+// the CLI's tryReadImage uses; the count cap bounds the WebSocket frame
+// size and keeps providers from rejecting the request.
+//
+// Document attachments (PDF, DOCX, plain text) use a higher input cap
+// defined in extract.go and are converted to plain text server-side
+// before reaching the runtime.
 const (
 	maxAttachmentBytes = 10 * 1024 * 1024
 	maxAttachmentCount = 20
 )
 
-// allowedAttachmentMimes mirrors the CLI's imageExtensions map. Anything not
-// listed here is rejected at the WebSocket boundary so a malformed UI can't
-// push arbitrary bytes downstream.
+// allowedAttachmentMimes mirrors the CLI's imageExtensions map. Anything
+// not listed here, not in allowedTextMimes, not text/*, and not in
+// extractorByMime is rejected at the WebSocket boundary so a malformed
+// UI can't push arbitrary bytes downstream.
 var allowedAttachmentMimes = map[string]struct{}{
 	"image/jpeg": {},
 	"image/png":  {},
@@ -317,36 +322,110 @@ var allowedAttachmentMimes = map[string]struct{}{
 	"image/bmp":  {},
 }
 
-// decodeChatAttachments validates and base64-decodes the attachments from a
-// chat.send request into the runtime's image content type. It enforces the
-// per-image size cap, the per-message count cap, and the MIME allowlist.
+// extractedDoc holds the plain-text content of one document attachment
+// after server-side extraction. Composed into the user message as a
+// fenced block by composeUserText.
+type extractedDoc struct {
+	Name string
+	Text string
+}
+
+// decodedAttachments is the parsed and validated form of a chat.send
+// attachment list. Image attachments flow into rt.Run as native image
+// content; document/text attachments are extracted server-side and
+// inlined into the user message text.
+type decodedAttachments struct {
+	Images []llm.ImageContent
+	Docs   []extractedDoc
+}
+
+// decodeChatAttachments validates, base64-decodes, and (for docs)
+// extracts the chat.send attachments. It enforces the MIME allowlist,
+// per-image size cap, per-document size cap, and per-message count cap.
 // Returned errors are safe to send back to the client.
-func decodeChatAttachments(atts []chatAttachmentParam) ([]llm.ImageContent, error) {
+func decodeChatAttachments(ctx context.Context, atts []chatAttachmentParam) (decodedAttachments, error) {
+	var out decodedAttachments
 	if len(atts) == 0 {
-		return nil, nil
+		return out, nil
 	}
 	if len(atts) > maxAttachmentCount {
-		return nil, fmt.Errorf("too many attachments (%d > %d)", len(atts), maxAttachmentCount)
+		return out, fmt.Errorf("too many attachments (%d > %d)", len(atts), maxAttachmentCount)
 	}
-	images := make([]llm.ImageContent, 0, len(atts))
 	for i, att := range atts {
 		mime := strings.ToLower(strings.TrimSpace(att.MimeType))
-		if _, ok := allowedAttachmentMimes[mime]; !ok {
-			return nil, fmt.Errorf("attachment %d: unsupported mime type %q", i, att.MimeType)
+		isImage := isImageMime(mime)
+		isDoc := isPlainTextMime(mime) || isExtractableDocMime(mime)
+		if !isImage && !isDoc {
+			return decodedAttachments{}, fmt.Errorf("attachment %d: unsupported mime type %q", i, att.MimeType)
 		}
+
 		data, err := base64.StdEncoding.DecodeString(att.Data)
 		if err != nil {
-			return nil, fmt.Errorf("attachment %d: invalid base64: %w", i, err)
+			return decodedAttachments{}, fmt.Errorf("attachment %d: invalid base64: %w", i, err)
 		}
 		if len(data) == 0 {
-			return nil, fmt.Errorf("attachment %d: empty data", i)
+			return decodedAttachments{}, fmt.Errorf("attachment %d: empty data", i)
 		}
-		if len(data) > maxAttachmentBytes {
-			return nil, fmt.Errorf("attachment %d: too large (%d > %d bytes)", i, len(data), maxAttachmentBytes)
+
+		if isImage {
+			if len(data) > maxAttachmentBytes {
+				return decodedAttachments{}, fmt.Errorf("attachment %d: too large (%d > %d bytes)", i, len(data), maxAttachmentBytes)
+			}
+			out.Images = append(out.Images, llm.ImageContent{MimeType: mime, Data: data})
+			continue
 		}
-		images = append(images, llm.ImageContent{MimeType: mime, Data: data})
+
+		// Document path.
+		if len(data) > maxAttachmentInputBytes {
+			return decodedAttachments{}, fmt.Errorf("attachment %d: too large (%d > %d bytes)", i, len(data), maxAttachmentInputBytes)
+		}
+		text, err := extractAttachmentText(ctx, mime, data)
+		if err != nil {
+			return decodedAttachments{}, fmt.Errorf("attachment %d (%s): %w", i, attachmentDisplayName(att, i), err)
+		}
+		out.Docs = append(out.Docs, extractedDoc{
+			Name: attachmentDisplayName(att, i),
+			Text: text,
+		})
 	}
-	return images, nil
+	return out, nil
+}
+
+// attachmentDisplayName returns a stable, log-safe label for an
+// attachment, preferring the user-supplied filename and falling back to
+// a positional identifier.
+func attachmentDisplayName(att chatAttachmentParam, idx int) string {
+	name := strings.TrimSpace(att.Name)
+	if name == "" {
+		return fmt.Sprintf("attachment-%d", idx+1)
+	}
+	return name
+}
+
+// composeUserText appends each extracted document to the user's typed
+// text as a fenced block. The fence is intentionally simple plain
+// text rather than a code fence so models don't waste effort guessing
+// at a syntax-highlight language.
+func composeUserText(text string, docs []extractedDoc) string {
+	if len(docs) == 0 {
+		return text
+	}
+	var sb strings.Builder
+	sb.WriteString(text)
+	for _, d := range docs {
+		if sb.Len() > 0 {
+			sb.WriteString("\n\n")
+		}
+		sb.WriteString("--- attached: ")
+		sb.WriteString(d.Name)
+		sb.WriteString(" ---\n")
+		sb.WriteString(d.Text)
+		if !strings.HasSuffix(d.Text, "\n") {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("--- end ---")
+	}
+	return sb.String()
 }
 
 func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCRequest) {
@@ -364,7 +443,11 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 		params.AgentID = "default"
 	}
 
-	images, err := decodeChatAttachments(params.Attachments)
+	// Bound the extraction stage at request scope: cancelled if the
+	// client disconnects mid-decode.
+	decodeCtx, decodeCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	decoded, err := decodeChatAttachments(decodeCtx, params.Attachments)
+	decodeCancel()
 	if err != nil {
 		writeJSON(conn, JSONRPCResponse{
 			JSONRPC: "2.0",
@@ -375,11 +458,18 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 	}
 
 	// Match the CLI default: a pure-attachment message gets a default
-	// prompt so providers always see a non-empty user text part.
+	// prompt so providers always see a non-empty user text part. Pick
+	// the prompt based on what was attached so the model isn't asked
+	// "what's in this image?" when the user attached a PDF.
 	if strings.TrimSpace(params.Text) == "" {
-		if len(images) > 0 {
+		switch {
+		case len(decoded.Images) > 0 && len(decoded.Docs) == 0:
 			params.Text = "What's in this image?"
-		} else {
+		case len(decoded.Docs) > 0 && len(decoded.Images) == 0:
+			params.Text = "Please review the attached document."
+		case len(decoded.Images) > 0 || len(decoded.Docs) > 0:
+			params.Text = "Please review the attached files."
+		default:
 			writeJSON(conn, JSONRPCResponse{
 				JSONRPC: "2.0",
 				Error:   map[string]any{"code": -32602, "message": "Empty message: text or attachments required"},
@@ -388,6 +478,10 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 			return
 		}
 	}
+
+	// Inline extracted document text into the user message as fenced
+	// blocks. Image attachments stay as native multimodal input below.
+	params.Text = composeUserText(params.Text, decoded.Docs)
 
 	h.mu.RLock()
 	agentCfg, ok := h.config.GetAgent(params.AgentID)
@@ -533,7 +627,10 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 			ID: rpcID,
 		})
 	})
-	trace.Mark("ws.received", "msg_chars", len(params.Text), "image_count", len(images))
+	trace.Mark("ws.received",
+		"msg_chars", len(params.Text),
+		"image_count", len(decoded.Images),
+		"doc_count", len(decoded.Docs))
 	runCtx = agent.WithTrace(runCtx, trace)
 
 	// Track this run so chat.abort and disconnect can cancel it
@@ -541,7 +638,7 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 	h.activeRuns[conn] = runCancel
 	h.mu.Unlock()
 
-	events, err := rt.Run(runCtx, params.Text, images)
+	events, err := rt.Run(runCtx, params.Text, decoded.Images)
 	if err != nil {
 		runCancel()
 		h.mu.Lock()
