@@ -65,6 +65,93 @@ func TestStorePersistence(t *testing.T) {
 	assert.FileExists(t, path)
 }
 
+// TestValidateSessionKey covers the path-traversal guard added so a
+// malicious WebSocket caller can't pass keys like "../../../tmp/x"
+// and have the Store compose them into filesystem paths that escape
+// the session directory. Every key-taking Store method calls
+// ValidateSessionKey before any I/O.
+func TestValidateSessionKey(t *testing.T) {
+	good := []string{"a", "default", "ws_default", "ws_KCMO", "k1", "with-hyphen", "1234"}
+	for _, k := range good {
+		assert.NoError(t, ValidateSessionKey(k), "key %q should be accepted", k)
+	}
+	bad := []struct {
+		key  string
+		want string // substring of error message
+	}{
+		{"", "required"},
+		{".", "cannot start with"},
+		{"..", "cannot start with"},
+		{"../escape", "cannot start with"},
+		{".bashrc", "cannot start with"},
+		{"foo/bar", "path separators"},
+		{"foo\\bar", "path separators"},
+		{"sub/dir/key", "path separators"},
+		{"/abs", "path separators"},
+		{"\\abs", "path separators"},
+	}
+	for _, tc := range bad {
+		err := ValidateSessionKey(tc.key)
+		require.Error(t, err, "key %q must be rejected", tc.key)
+		assert.Contains(t, err.Error(), tc.want, "expected %q in error for %q, got %q", tc.want, tc.key, err.Error())
+	}
+}
+
+// TestStorePathTraversalRejected is the integration-level guard:
+// every public Store method that takes a key returns an error
+// (rather than touching the filesystem) when given a traversal-y
+// key. Belt-and-suspenders with TestValidateSessionKey since each
+// method's path-joining could otherwise diverge silently.
+func TestStorePathTraversalRejected(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	// Seed a real session so the store has something to compare
+	// against (some methods short-circuit on missing keys before
+	// hitting the validate guard if the order's off).
+	sess, err := store.Load("agent1", "real")
+	require.NoError(t, err)
+	sess.Append(UserMessageEntry("hi"))
+
+	for _, key := range []string{"../escape", "..", ".", "sub/key", "foo/bar"} {
+		t.Run("Load_"+key, func(t *testing.T) {
+			_, err := store.Load("agent1", key)
+			require.Error(t, err)
+		})
+		t.Run("Create_"+key, func(t *testing.T) {
+			err := store.Create("agent1", key)
+			require.Error(t, err)
+		})
+		t.Run("Delete_"+key, func(t *testing.T) {
+			err := store.Delete("agent1", key)
+			require.Error(t, err)
+		})
+		t.Run("SetName_"+key, func(t *testing.T) {
+			err := store.SetName("agent1", key, "x")
+			require.Error(t, err)
+		})
+		t.Run("SetPinned_"+key, func(t *testing.T) {
+			err := store.SetPinned("agent1", key, true)
+			require.Error(t, err)
+		})
+		t.Run("Rename_oldKey_"+key, func(t *testing.T) {
+			err := store.Rename("agent1", key, "newkey")
+			require.Error(t, err)
+		})
+		t.Run("Rename_newKey_"+key, func(t *testing.T) {
+			err := store.Rename("agent1", "real", key)
+			require.Error(t, err)
+		})
+	}
+
+	// Final sanity: nothing leaked outside the agent dir. List the
+	// parent (TempDir) — should hold only the agent1 subdir.
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "agent1", entries[0].Name())
+}
+
 // TestStoreSessionMeta covers the friendly-name + pinned sidecar
 // added for the chat sidebar — set, persist, list, clear, missing-
 // session error paths, plus the rename and delete sidecar-follow

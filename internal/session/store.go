@@ -12,6 +12,39 @@ import (
 	"time"
 )
 
+// ValidateSessionKey checks that a session key is safe to use as a
+// path component before any of the Store methods compose it into a
+// JSONL or metadata-sidecar filename. Without this, a malicious
+// caller could pass keys like "../../../tmp/escape" and have
+// filepath.Join resolve outside the session directory — write a
+// .meta.json anywhere the user has filesystem perms, or read
+// arbitrary files via Load.
+//
+// Rules:
+//   - non-empty
+//   - no path separators (/ or \)
+//   - no leading dot — defense against ".", "..", and hidden files
+//     like ".bashrc" being shadowed by session metadata
+//   - filepath.IsLocal accepts the result (Go 1.20+ guard against
+//     absolute paths, parent-traversal, and Windows reserved names)
+//
+// Returned errors are safe to surface to a remote caller.
+func ValidateSessionKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("session key required")
+	}
+	if strings.HasPrefix(key, ".") {
+		return fmt.Errorf("session key cannot start with %q", ".")
+	}
+	if strings.ContainsAny(key, `/\`) {
+		return fmt.Errorf("session key cannot contain path separators")
+	}
+	if !filepath.IsLocal(key) {
+		return fmt.Errorf("session key must be a local path component")
+	}
+	return nil
+}
+
 // SessionInfo describes a session without loading its full contents.
 type SessionInfo struct {
 	Key string `json:"key"`
@@ -120,6 +153,9 @@ func (s *Store) saveMeta(agentID, key string, m sessionMeta) error {
 // The session must exist; otherwise this returns an error so a stale
 // UI can't seed metadata for a key that's already been deleted.
 func (s *Store) SetName(agentID, key, name string) error {
+	if err := ValidateSessionKey(key); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.existsLocked(agentID, key) {
@@ -133,6 +169,9 @@ func (s *Store) SetName(agentID, key, name string) error {
 // SetPinned flips the pinned flag for a session. Pinned sessions
 // surface above the time-bucketed list in the chat sidebar.
 func (s *Store) SetPinned(agentID, key string, pinned bool) error {
+	if err := ValidateSessionKey(key); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.existsLocked(agentID, key) {
@@ -152,6 +191,9 @@ func (s *Store) existsLocked(agentID, key string) bool {
 
 // Load reads a session from its JSONL file.
 func (s *Store) Load(agentID, key string) (*Session, error) {
+	if err := ValidateSessionKey(key); err != nil {
+		return nil, err
+	}
 	path := s.sessionPath(agentID, key)
 
 	f, err := os.Open(path)
@@ -229,6 +271,9 @@ func (s *Store) AppendEntry(sess *Session, entry SessionEntry) {
 
 // Create creates an empty session file on disk so it shows up in List.
 func (s *Store) Create(agentID, key string) error {
+	if err := ValidateSessionKey(key); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -336,6 +381,12 @@ func (s *Store) Exists(agentID, key string) bool {
 // underlying-key operation used by the CLI; in the chat UI, friendly
 // name changes are handled by SetName, which leaves the key alone.
 func (s *Store) Rename(agentID, oldKey, newKey string) error {
+	if err := ValidateSessionKey(oldKey); err != nil {
+		return fmt.Errorf("oldKey: %w", err)
+	}
+	if err := ValidateSessionKey(newKey); err != nil {
+		return fmt.Errorf("newKey: %w", err)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -367,6 +418,9 @@ func (s *Store) Rename(agentID, oldKey, newKey string) error {
 
 // Delete removes a session's JSONL file and any metadata sidecar.
 func (s *Store) Delete(agentID, key string) error {
+	if err := ValidateSessionKey(key); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
