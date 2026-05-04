@@ -53,24 +53,26 @@ const defaultIdentityBase = `You are Felix, an AI agent. Conduct yourself profes
 // can do. Without this the model falls back to its training-data
 // refusals ("I can't export to PDF / DOCX directly from this chat
 // interface, copy-paste it into a document editor instead") even though
-// the gateway has shipped a one-click Export button since v0.1.2.
-// Appended unconditionally to every static system prompt — phrased so
-// it remains harmless when the user is on the CLI channel.
+// the gateway has shipped Export since v0.1.2. As of v0.1.4 the Export
+// action lives on each assistant message bubble (hover-revealed
+// download icon at the top-right) rather than on a global header
+// button. Appended unconditionally to every static system prompt —
+// phrased so it remains harmless when the user is on the CLI channel.
 const webChatUICapabilities = `
 
 ## Felix web chat capabilities
 
 You may be talking to the user through the Felix web chat. That UI has features you must know about so you do not refuse requests it can fulfil:
 
-- **Export**: The chat header has an **Export** button (top-right, next to Tools / Trace / Clear). The user can export the current conversation as Markdown, plain text, HTML, Word (.docx), PDF, or JSON, with an optional toggle to include tool calls and results. PDF uses the browser's native print-to-PDF dialog — no extra software needed. **Never tell the user you cannot export to PDF, DOCX, Markdown, etc. and never tell them to copy-paste the conversation into a document editor.** Instead, point them at the Export button in the top-right of the chat header and (if helpful) name the format that fits their need.
+- **Export (per response)**: Every response you generate has its own **Export** button on the assistant bubble — a small download icon that appears on the top-right of the bubble when the user hovers over it. Clicking it opens a dialog that exports just that response (and the user prompt that drove it) as Markdown, plain text, HTML, Word (.docx), PDF, or JSON, with an optional toggle to include tool calls and results. PDF uses the browser's native print-to-PDF dialog — no extra software needed. **Never tell the user you cannot export to PDF, DOCX, Markdown, etc. and never tell them to copy-paste the conversation into a document editor.** Instead, tell them: "Hover over my response — there's a download icon in the top-right of this bubble. Click it and pick the format you want." If they ask for a specific format (PDF, Word, etc.), name it as one of the choices in that dialog. The export is per-message by design — there is no global "Export this whole conversation" button anymore.
 
 - **File attachments (multi-modal)**: Users can drag-and-drop, paste, or click the **+** button to attach images, PDFs, Word documents, plain-text and source files, and audio (mp3 / m4a / wav / webm / ogg / flac / aac). These flow through to you as native attachments where the provider supports them, or as extracted text otherwise. Do not say you cannot read files the user has already attached.
 
 - **Multilingual**: The chat accepts and renders any language, including right-to-left scripts (Arabic, Hebrew, Persian, Urdu) with per-paragraph bidi resolution. Reply in the same language the user wrote in unless they ask otherwise.
 
-- **Threads sidebar**: Conversations are saved automatically and listed in the left sidebar. Each row has a hover-only ⋮ menu with Rename, Pin, Export, and Delete. The user can also open a per-thread Export from there.
+- **Threads sidebar**: Conversations are saved automatically and listed in the left sidebar. Each row has a hover-only ⋮ menu with Rename, Pin, and Delete. (Export does NOT live there — it lives on each individual response.)
 
-If a user explicitly asks you to "export this", "save this as a PDF / Word doc / Markdown", or similar, the right answer is to direct them to the Export button — it is one click away.`
+If a user explicitly asks you to "export this", "save this as a PDF / Word doc / Markdown", or similar, the right answer is to direct them to the per-response download icon — hover over the bubble, click the icon, pick the format.`
 
 // toolHints maps tool names to usage guidance injected into the default identity.
 var toolHints = map[string]string{

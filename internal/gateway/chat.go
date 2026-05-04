@@ -353,8 +353,7 @@ html.light #header .logo {
 	color: var(--text);
 	transition: border-color 0.3s;
 }
-#clear-btn,
-#export-btn {
+#clear-btn {
 	background: none;
 	border: 1px solid var(--border);
 	border-radius: 6px;
@@ -365,8 +364,6 @@ html.light #header .logo {
 	color: var(--text);
 	transition: border-color 0.3s;
 }
-#export-btn:hover { border-color: var(--accent); color: var(--accent); }
-#export-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 #messages {
 	flex: 1;
 	overflow-y: auto;
@@ -376,6 +373,7 @@ html.light #header .logo {
 	gap: 1rem;
 }
 .msg {
+	position: relative;
 	max-width: 85%%;
 	padding: 0.75rem 1rem;
 	border-radius: 12px;
@@ -385,6 +383,37 @@ html.light #header .logo {
 	overflow-wrap: break-word;
 	transition: background 0.3s, border-color 0.3s;
 }
+/* Per-bubble Export button. Top-right of the assistant message,
+   hover-revealed (matches the per-row ⋮ menu pattern). The
+   button has its own keyboard focus state so users on
+   keyboard-only navigation can reach it without hovering. */
+.msg-export-btn {
+	position: absolute;
+	top: 0.4rem;
+	right: 0.4rem;
+	width: 24px;
+	height: 24px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	color: var(--text-muted);
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.msg.assistant:hover .msg-export-btn,
+.msg-export-btn:focus-visible {
+	opacity: 1;
+}
+.msg-export-btn:hover {
+	color: var(--accent);
+	border-color: var(--border);
+	background: var(--bg-code);
+}
+.msg-export-btn svg { width: 14px; height: 14px; }
 .msg.user {
 	background: var(--bg-msg-user);
 	align-self: flex-end;
@@ -1422,7 +1451,6 @@ html.light #header .logo {
 	<span class="spacer"></span>
 	<button id="toggle-tools-btn" title="Hide/show tool calls">Tools</button>
 	<button id="toggle-trace-btn" title="Hide/show live trace panel">Trace</button>
-	<button id="export-btn" title="Export this conversation as Markdown, Text, HTML, Word, PDF, or JSON">Export</button>
 	<button id="clear-btn" title="Clear session">Clear</button>
 	<button id="theme-btn" title="Toggle light/dark mode" aria-label="Toggle theme">&#9790;</button>
 	<span id="conn-status" class="connecting">connecting</span>
@@ -1469,7 +1497,6 @@ html.light #header .logo {
 	var connStatus = document.getElementById('conn-status');
 	var themeBtn = document.getElementById('theme-btn');
 	var clearBtn = document.getElementById('clear-btn');
-	var exportBtn = document.getElementById('export-btn');
 	var stopBtn = document.getElementById('stop-btn');
 	var agentSelect = document.getElementById('agent-select');
 	var newChatBtn = document.getElementById('new-chat-btn');
@@ -1928,20 +1955,6 @@ html.light #header .logo {
 		loadSessions();
 	});
 
-	// Export the active conversation. Resolves the session record from
-	// sessionsCache so the dialog can show the friendly name; falls back
-	// to a minimal stub when the cache hasn't loaded yet (the server
-	// only needs the key).
-	exportBtn.addEventListener('click', function() {
-		if (!activeSessionKey) return;
-		var s = null;
-		for (var i = 0; i < sessionsCache.length; i++) {
-			if (sessionsCache[i].key === activeSessionKey) { s = sessionsCache[i]; break; }
-		}
-		if (!s) s = { key: activeSessionKey, name: '', preview: '' };
-		openExportDialog(s);
-	});
-
 	agentSelect.addEventListener('change', function() {
 		clearMessagesPane();
 		resetTokenChip();
@@ -2391,7 +2404,10 @@ html.light #header .logo {
 		}
 		menu.appendChild(mkItem('Rename', 'i-pencil', false, function(){ beginRenameRow(row, s); }));
 		menu.appendChild(mkItem(s.pinned ? 'Unpin' : 'Pin', 'i-pin', false, function(){ setPinned(s.key, !s.pinned); }));
-		menu.appendChild(mkItem('Export…', 'i-export', false, function(){ openExportDialog(s); }));
+		// Export lives on each assistant message bubble (hover-revealed
+		// download icon) — not in the per-thread row menu — so the user's
+		// path-of-least-resistance is to export the specific response
+		// they're looking at, not the whole conversation.
 		var sep = document.createElement('div');
 		sep.className = 'menu-sep';
 		menu.appendChild(sep);
@@ -2488,7 +2504,13 @@ html.light #header .logo {
 	// HTML export in a new window and triggers window.print() so the
 	// user gets the OS's native "Save as PDF" dialog without the
 	// gateway needing LaTeX or wkhtmltopdf installed.
-	function openExportDialog(s) {
+	function openExportDialog(s, messageIndex) {
+		// messageIndex is optional — when provided (>= 0) the dialog
+		// scopes the download to a single assistant message + the user
+		// prompt that drove it. Otherwise it falls back to a full-
+		// conversation export.
+		var perMessage = (typeof messageIndex === 'number' && messageIndex >= 0);
+
 		// Close any prior dialog first.
 		var existing = document.getElementById('export-dialog');
 		if (existing) existing.remove();
@@ -2496,9 +2518,13 @@ html.light #header .logo {
 		var overlay = document.createElement('div');
 		overlay.id = 'export-dialog';
 		overlay.className = 'export-overlay';
+		var heading = perMessage ? 'Export this response' : 'Export conversation';
+		var sub = perMessage
+			? 'Message ' + (messageIndex + 1) + ' from "' + escHtml(sessionDisplayName(s)) + '"'
+			: escHtml(sessionDisplayName(s));
 		overlay.innerHTML = '<div class="export-card" role="dialog" aria-modal="true" aria-labelledby="export-title">' +
-			'<h3 id="export-title">Export conversation</h3>' +
-			'<div class="export-sub">' + escHtml(sessionDisplayName(s)) + '</div>' +
+			'<h3 id="export-title">' + heading + '</h3>' +
+			'<div class="export-sub">' + sub + '</div>' +
 			'<div class="export-formats">' +
 				'<button class="export-fmt" data-fmt="md"   title="Markdown (.md)">Markdown</button>' +
 				'<button class="export-fmt" data-fmt="txt"  title="Plain text (.txt)">Text</button>' +
@@ -2534,10 +2560,23 @@ html.light #header .logo {
 			btn.addEventListener('click', function() {
 				var fmt = btn.dataset.fmt;
 				var includeTools = includeToolsEl.checked;
-				doExport(s.key, fmt, includeTools);
+				doExport(s.key, fmt, includeTools, perMessage ? messageIndex : -1);
 				close();
 			});
 		});
+	}
+
+	// openExportDialogForMessage is the entry point used by the
+	// per-bubble export icon. It resolves the active session (so the
+	// dialog can show the friendly name) and forwards messageIndex.
+	function openExportDialogForMessage(messageIndex) {
+		if (!activeSessionKey) return;
+		var s = null;
+		for (var i = 0; i < sessionsCache.length; i++) {
+			if (sessionsCache[i].key === activeSessionKey) { s = sessionsCache[i]; break; }
+		}
+		if (!s) s = { key: activeSessionKey, name: '', preview: '' };
+		openExportDialog(s, messageIndex);
 	}
 
 	// doExport drives one export. For 'pdf' it opens the HTML export
@@ -2545,11 +2584,14 @@ html.light #header .logo {
 	// browser's print dialog has a built-in "Save as PDF" option, so
 	// no server-side LaTeX/wkhtmltopdf is required. For the rest, a
 	// hidden <a download> link kicks off the file download.
-	function doExport(key, fmt, includeTools) {
+	function doExport(key, fmt, includeTools, messageIndex) {
 		var base = '/api/session/export?agentId=' +
 			encodeURIComponent(agentSelect.value) +
 			'&sessionKey=' + encodeURIComponent(key) +
 			'&includeTools=' + (includeTools ? 'true' : 'false');
+		if (typeof messageIndex === 'number' && messageIndex >= 0) {
+			base += '&messageIndex=' + messageIndex;
+		}
 		if (fmt === 'pdf') {
 			var url = base + '&format=html';
 			var w = window.open(url, '_blank');
@@ -2665,6 +2707,9 @@ html.light #header .logo {
 		messagesEl.appendChild(empty);
 		currentAssistant = null;
 		toolEls = {};
+		// Reset the per-bubble export counter — the next assistant
+		// message rendered into a fresh session is "message 0".
+		assistantMsgCounter = 0;
 	}
 
 	var ws = null;
@@ -3130,10 +3175,19 @@ html.light #header .logo {
 		scrollToBottom();
 	}
 
+	// Counter for the Nth assistant message in the currently-rendered
+	// session. Bumped by addAssistantMsg, reset by clearMessagesPane.
+	// The value is baked into each assistant bubble as data-msg-idx so
+	// the per-bubble Export button can pass messageIndex=N to the
+	// /api/session/export endpoint.
+	var assistantMsgCounter = 0;
+
 	function addAssistantMsg() {
 		messagesEl.classList.add('has-messages');
 		var div = document.createElement('div');
 		div.className = 'msg assistant';
+		var idx = assistantMsgCounter++;
+		div.setAttribute('data-msg-idx', String(idx));
 		var content = document.createElement('div');
 		content.className = 'content';
 		// Same dir=auto / unicode-bidi:plaintext treatment as user
@@ -3141,6 +3195,21 @@ html.light #header .logo {
 		// correct per-paragraph direction.
 		content.setAttribute('dir', 'auto');
 		div.appendChild(content);
+		// Per-message Export button — hover-revealed download icon on
+		// the top-right of the bubble. Click opens the export dialog
+		// scoped to this message (server resolves Nth assistant turn
+		// + the user prompt that drove it).
+		var exportBtn = document.createElement('button');
+		exportBtn.className = 'msg-export-btn';
+		exportBtn.type = 'button';
+		exportBtn.setAttribute('aria-label', 'Export this response');
+		exportBtn.setAttribute('title', 'Export this response (Markdown / Text / HTML / Word / PDF / JSON)');
+		exportBtn.innerHTML = '<svg width="14" height="14" aria-hidden="true"><use href="#i-export"></use></svg>';
+		exportBtn.addEventListener('click', function(e) {
+			e.stopPropagation();
+			openExportDialogForMessage(idx);
+		});
+		div.appendChild(exportBtn);
 		messagesEl.appendChild(div);
 		scrollToBottom();
 		return { el: div, content: content, raw: '' };

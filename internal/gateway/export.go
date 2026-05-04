@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,9 @@ type ExportHandlers struct {
 //	    &sessionKey=<key>
 //	    &format=md|txt|html|docx|json
 //	    &includeTools=true|false  (default: false)
+//	    &messageIndex=<N>         (optional — Nth assistant message,
+//	                               0-based; exports just that turn
+//	                               plus its preceding user prompt)
 //
 // On success it returns the rendered body with Content-Disposition
 // set to attachment so browsers download rather than navigate.
@@ -56,6 +60,20 @@ func NewExportHandlers(store *session.Store) *ExportHandlers {
 			sessionKey := strings.TrimSpace(q.Get("sessionKey"))
 			format := ExportFormat(strings.TrimSpace(q.Get("format")))
 			includeTools := q.Get("includeTools") == "true" || q.Get("includeTools") == "1"
+
+			// messageIndex is optional. Absent / empty / negative means
+			// "export the whole session". A non-negative integer scopes
+			// the export to the Nth (0-based) assistant message and the
+			// preceding user prompt (a self-contained Q&A pair).
+			messageIndex := -1
+			if raw := strings.TrimSpace(q.Get("messageIndex")); raw != "" {
+				n, err := strconv.Atoi(raw)
+				if err != nil {
+					http.Error(w, "messageIndex must be an integer", http.StatusBadRequest)
+					return
+				}
+				messageIndex = n
+			}
 
 			if agentID == "" {
 				agentID = "default"
@@ -90,23 +108,36 @@ func NewExportHandlers(store *session.Store) *ExportHandlers {
 				}
 			}
 
+			entries := selectExportEntries(sess.Entries(), messageIndex)
+			if messageIndex >= 0 && len(entries) == 0 {
+				http.Error(w, "messageIndex out of range", http.StatusBadRequest)
+				return
+			}
+
+			// Per-message exports get a "-msgN" filename suffix so a
+			// flurry of single-response exports doesn't collide on disk.
+			filenameStem := sanitizeExportFilename(displayName)
+			if messageIndex >= 0 {
+				filenameStem = fmt.Sprintf("%s-msg%d", filenameStem, messageIndex+1)
+			}
+
 			var body []byte
 			var contentType, ext string
 			switch format {
 			case ExportMarkdown:
-				body = []byte(renderConversationMarkdown(sess, displayName, includeTools))
+				body = []byte(renderConversationMarkdown(entries, displayName, includeTools))
 				contentType = "text/markdown; charset=utf-8"
 				ext = "md"
 			case ExportText:
-				body = []byte(renderConversationText(sess, includeTools))
+				body = []byte(renderConversationText(entries, includeTools))
 				contentType = "text/plain; charset=utf-8"
 				ext = "txt"
 			case ExportHTML:
-				body = []byte(renderConversationHTML(sess, displayName, includeTools))
+				body = []byte(renderConversationHTML(entries, displayName, includeTools))
 				contentType = "text/html; charset=utf-8"
 				ext = "html"
 			case ExportJSON:
-				out, err := json.MarshalIndent(sess.Entries(), "", "  ")
+				out, err := json.MarshalIndent(entries, "", "  ")
 				if err != nil {
 					http.Error(w, "marshal: "+err.Error(), http.StatusInternalServerError)
 					return
@@ -115,7 +146,7 @@ func NewExportHandlers(store *session.Store) *ExportHandlers {
 				contentType = "application/json; charset=utf-8"
 				ext = "json"
 			case ExportDocx:
-				md := renderConversationMarkdown(sess, displayName, includeTools)
+				md := renderConversationMarkdown(entries, displayName, includeTools)
 				out, err := mdToDocx(r.Context(), md)
 				if err != nil {
 					// Surface the install-hint path so the chat UI
@@ -133,7 +164,7 @@ func NewExportHandlers(store *session.Store) *ExportHandlers {
 				return
 			}
 
-			filename := sanitizeExportFilename(displayName) + "." + ext
+			filename := filenameStem + "." + ext
 			w.Header().Set("Content-Type", contentType)
 			w.Header().Set("Content-Disposition",
 				`attachment; filename="`+filename+`"`)
@@ -141,6 +172,50 @@ func NewExportHandlers(store *session.Store) *ExportHandlers {
 			_, _ = w.Write(body)
 		},
 	}
+}
+
+// selectExportEntries narrows a session's entries to what should be
+// rendered. messageIndex < 0 means "the whole session"; messageIndex
+// >= 0 scopes the export to the Nth (0-based) assistant message and
+// the user message immediately preceding it. Tool-call / tool-result
+// entries between the user prompt and the target assistant message
+// are kept — the renderer's includeTools flag still decides whether
+// they appear in the rendered output.
+//
+// Returns nil when messageIndex is out of range so the handler can
+// return 400.
+func selectExportEntries(entries []session.SessionEntry, messageIndex int) []session.SessionEntry {
+	if messageIndex < 0 {
+		return entries
+	}
+	targetIdx := -1
+	seen := 0
+	for i, e := range entries {
+		if e.Type == session.EntryTypeMessage && e.Role == "assistant" {
+			if seen == messageIndex {
+				targetIdx = i
+				break
+			}
+			seen++
+		}
+	}
+	if targetIdx == -1 {
+		return nil
+	}
+	// Walk back until we hit the user message that drove this turn.
+	userIdx := -1
+	for j := targetIdx - 1; j >= 0; j-- {
+		if entries[j].Type == session.EntryTypeMessage && entries[j].Role == "user" {
+			userIdx = j
+			break
+		}
+	}
+	if userIdx == -1 {
+		// Conversation opened with an assistant message (rare — system-
+		// seeded greetings, etc.). Export just the assistant entry.
+		return []session.SessionEntry{entries[targetIdx]}
+	}
+	return entries[userIdx : targetIdx+1]
 }
 
 // sanitizeExportFilename strips characters that would be illegal or
@@ -172,7 +247,7 @@ func sanitizeExportFilename(name string) string {
 //   - txt: strip headings + emphasis runes
 //   - html: pre-rendered with a simple style
 //   - docx: piped through pandoc
-func renderConversationMarkdown(sess *session.Session, title string, includeTools bool) string {
+func renderConversationMarkdown(entries []session.SessionEntry, title string, includeTools bool) string {
 	var sb strings.Builder
 	sb.WriteString("# ")
 	sb.WriteString(title)
@@ -181,7 +256,7 @@ func renderConversationMarkdown(sess *session.Session, title string, includeTool
 	sb.WriteString(time.Now().Format(time.RFC3339))
 	sb.WriteString("_\n\n---\n\n")
 
-	for _, e := range sess.Entries() {
+	for _, e := range entries {
 		switch e.Type {
 		case session.EntryTypeMessage:
 			var md session.MessageData
@@ -243,9 +318,9 @@ func renderConversationMarkdown(sess *session.Session, title string, includeTool
 // runes stripped — heading prefixes become plain "You:" / "Assistant:"
 // labels and code-fence backticks drop. Suitable for opening in any
 // editor that doesn't render markdown.
-func renderConversationText(sess *session.Session, includeTools bool) string {
+func renderConversationText(entries []session.SessionEntry, includeTools bool) string {
 	var sb strings.Builder
-	for _, e := range sess.Entries() {
+	for _, e := range entries {
 		switch e.Type {
 		case session.EntryTypeMessage:
 			var md session.MessageData
@@ -294,7 +369,7 @@ func renderConversationText(sess *session.Session, includeTools bool) string {
 // calls window.print() — the user gets the OS's native "Save as
 // PDF" dialog without the gateway needing LaTeX or wkhtmltopdf
 // installed.
-func renderConversationHTML(sess *session.Session, title string, includeTools bool) string {
+func renderConversationHTML(entries []session.SessionEntry, title string, includeTools bool) string {
 	var sb strings.Builder
 	sb.WriteString(`<!doctype html>
 <html lang="en">
@@ -333,7 +408,7 @@ code { font-family: "SF Mono", "Fira Code", Menlo, monospace; }
 	fmt.Fprintf(&sb, "<p class=\"meta\">Exported %s</p>\n",
 		htmlEscape(time.Now().Format(time.RFC1123)))
 
-	for _, e := range sess.Entries() {
+	for _, e := range entries {
 		switch e.Type {
 		case session.EntryTypeMessage:
 			var md session.MessageData

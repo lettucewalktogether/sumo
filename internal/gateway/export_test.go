@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -318,3 +319,128 @@ func TestExport_ContextCancelStopsDocxQueue(t *testing.T) {
 // Helper: round-trip a query through url.QueryEscape so test URLs
 // stay readable while still handling tricky characters cleanly.
 func _ /*urlAware*/ (key string) string { return url.QueryEscape(key) }
+
+// seedMultiTurnSession builds a session with three Q&A pairs so the
+// per-message export tests have multiple assistant turns to address.
+// Pair 0: weather  · Pair 1: PDFs (with a tool call)  · Pair 2: docs
+func seedMultiTurnSession(t *testing.T, store *session.Store, agentID, key string) *session.Session {
+	t.Helper()
+	sess, err := store.Load(agentID, key)
+	require.NoError(t, err)
+	sess.Append(session.UserMessageEntry("What's the weather?"))
+	sess.Append(session.AssistantMessageEntry("I can't check live weather."))
+	sess.Append(session.UserMessageEntry("How does Felix handle PDFs?"))
+	sess.Append(session.ToolCallEntry("tc-1", "read_file",
+		json.RawMessage(`{"path":"./report.pdf"}`)))
+	sess.Append(session.ToolResultEntry("tc-1", "PDF content here.", "", nil))
+	sess.Append(session.AssistantMessageEntry(
+		"Felix routes PDFs through native document blocks where the provider supports them."))
+	sess.Append(session.UserMessageEntry("Where do exported docs go?"))
+	sess.Append(session.AssistantMessageEntry(
+		"The download location depends on your browser's settings."))
+	return sess
+}
+
+// TestExport_MessageIndexPicksOnePair exercises the per-message
+// export path. messageIndex=1 should include only the second
+// assistant turn and the user prompt that drove it — not the first
+// or third turns. The tool call between the user prompt and the
+// assistant reply is included in the entry slice but only emitted
+// when includeTools is on.
+func TestExport_MessageIndexPicksOnePair(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	seedMultiTurnSession(t, store, "default", "k1")
+	h := NewExportHandlers(store)
+
+	req := httptest.NewRequest("GET",
+		"/api/session/export?agentId=default&sessionKey=k1&format=md&messageIndex=1", nil)
+	rec := httptest.NewRecorder()
+	h.Export(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "How does Felix handle PDFs?")
+	assert.Contains(t, body, "native document blocks")
+	// The other turns must NOT appear.
+	assert.NotContains(t, body, "weather")
+	assert.NotContains(t, body, "exported docs")
+	// includeTools defaults to false — tool call shouldn't render.
+	assert.NotContains(t, body, "Tool call")
+
+	// Filename must encode the message index so a flurry of single-
+	// response exports doesn't collide on the user's filesystem.
+	assert.Contains(t, rec.Header().Get("Content-Disposition"), "msg2")
+}
+
+// TestExport_MessageIndexZeroAndLast covers the boundary cases —
+// the very first assistant turn (idx 0) and the last one (idx 2).
+func TestExport_MessageIndexZeroAndLast(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	seedMultiTurnSession(t, store, "default", "k1")
+	h := NewExportHandlers(store)
+
+	for _, tc := range []struct {
+		idx     int
+		mustHave, mustNotHave string
+	}{
+		{0, "What's the weather?", "PDFs"},
+		{2, "Where do exported docs go?", "weather"},
+	} {
+		req := httptest.NewRequest("GET",
+			"/api/session/export?agentId=default&sessionKey=k1&format=md&messageIndex="+
+				strconv.Itoa(tc.idx), nil)
+		rec := httptest.NewRecorder()
+		h.Export(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, "idx=%d body=%s", tc.idx, rec.Body.String())
+		assert.Contains(t, rec.Body.String(), tc.mustHave, "idx=%d", tc.idx)
+		assert.NotContains(t, rec.Body.String(), tc.mustNotHave, "idx=%d", tc.idx)
+	}
+}
+
+// TestExport_MessageIndexIncludeToolsKeepsToolCall confirms the
+// tool call between the user prompt and the target assistant
+// message renders when includeTools is on.
+func TestExport_MessageIndexIncludeToolsKeepsToolCall(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	seedMultiTurnSession(t, store, "default", "k1")
+	h := NewExportHandlers(store)
+
+	req := httptest.NewRequest("GET",
+		"/api/session/export?agentId=default&sessionKey=k1&format=md&messageIndex=1&includeTools=true", nil)
+	rec := httptest.NewRecorder()
+	h.Export(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Tool call")
+	assert.Contains(t, body, "read_file")
+	assert.Contains(t, body, "Tool result")
+}
+
+// TestExport_MessageIndexOutOfRange returns 400 when the requested
+// index doesn't resolve to an assistant message.
+func TestExport_MessageIndexOutOfRange(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	seedMultiTurnSession(t, store, "default", "k1")
+	h := NewExportHandlers(store)
+
+	req := httptest.NewRequest("GET",
+		"/api/session/export?agentId=default&sessionKey=k1&format=md&messageIndex=99", nil)
+	rec := httptest.NewRecorder()
+	h.Export(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "out of range")
+}
+
+// TestExport_MessageIndexNonInteger rejects garbage in the param.
+func TestExport_MessageIndexNonInteger(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	seedMultiTurnSession(t, store, "default", "k1")
+	h := NewExportHandlers(store)
+
+	req := httptest.NewRequest("GET",
+		"/api/session/export?agentId=default&sessionKey=k1&format=md&messageIndex=abc", nil)
+	rec := httptest.NewRecorder()
+	h.Export(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "messageIndex")
+}

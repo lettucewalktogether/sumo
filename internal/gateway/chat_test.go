@@ -60,10 +60,6 @@ func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
 		`id="sidebar-footer"`,
 		`id="main-pane"`,
 		`id="messages-empty"`,
-		// Header export button — gives users a one-click way to export
-		// the current conversation without hunting through the per-row
-		// ⋮ menu.
-		`id="export-btn"`,
 		// Tabs + cog + Jobs surface added in PR 3.
 		`id="settings-btn"`,
 		`id="sidebar-tabs"`,
@@ -87,13 +83,25 @@ func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
 	// Stale-element regression — the original session dropdown and
 	// "+ New" header button were replaced by the sidebar; if either
 	// reappears the JS will have two competing inputs for the same
-	// state.
+	// state. Also locks the v0.1.4 move from a global header Export
+	// button to the per-bubble hover icon — id="export-btn" must
+	// not reappear, and the new .msg-export-btn class must.
 	for _, gone := range []string{
 		`id="session-select"`,
 		`id="new-session-btn"`,
+		`id="export-btn"`,
 	} {
 		assert.NotContains(t, html, gone, "expected pre-sidebar element %q to be gone", gone)
 	}
+	// Per-message Export hook — the assistant bubble factory always
+	// attaches a .msg-export-btn, and the dialog branch on perMessage
+	// is what swaps the heading from "Export conversation" to
+	// "Export this response". If either disappears, per-message
+	// export is silently broken.
+	assert.Contains(t, html, "msg-export-btn",
+		"per-bubble Export button class must be in the served HTML")
+	assert.Contains(t, html, "Export this response",
+		"per-message export dialog heading must be in the served HTML")
 
 	// Allowed MIME list (UI side) must mirror the server allowlist.
 	for mime := range allowedAttachmentMimes {
