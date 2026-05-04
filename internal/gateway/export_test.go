@@ -66,8 +66,11 @@ func TestExport_UnsupportedFormat(t *testing.T) {
 	seedTestSession(t, store, "default", "k1", false)
 	h := NewExportHandlers(store)
 
+	// rtf isn't supported — use it to verify the unsupported-format
+	// branch (pdf used to belong here before v0.1.5 made it a real
+	// server-side renderer).
 	req := httptest.NewRequest("GET",
-		"/api/session/export?agentId=default&sessionKey=k1&format=pdf", nil)
+		"/api/session/export?agentId=default&sessionKey=k1&format=rtf", nil)
 	rec := httptest.NewRecorder()
 	h.Export(rec, req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)

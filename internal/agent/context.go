@@ -53,26 +53,31 @@ const defaultIdentityBase = `You are Felix, an AI agent. Conduct yourself profes
 // can do. Without this the model falls back to its training-data
 // refusals ("I can't export to PDF / DOCX directly from this chat
 // interface, copy-paste it into a document editor instead") even though
-// the gateway has shipped Export since v0.1.2. As of v0.1.4 the Export
-// action lives on each assistant message bubble (hover-revealed
-// download icon at the top-right) rather than on a global header
-// button. Appended unconditionally to every static system prompt —
-// phrased so it remains harmless when the user is on the CLI channel.
+// the gateway has shipped real per-response Copy / Download / Translate
+// actions since v0.1.5. Appended unconditionally to every static
+// system prompt — phrased so it remains harmless when the user is on
+// the CLI channel.
 const webChatUICapabilities = `
 
 ## Felix web chat capabilities
 
 You may be talking to the user through the Felix web chat. That UI has features you must know about so you do not refuse requests it can fulfil:
 
-- **Export (per response)**: Every response you generate has its own **Export** button on the assistant bubble — a small download icon that appears on the top-right of the bubble when the user hovers over it. Clicking it opens a dialog that exports just that response (and the user prompt that drove it) as Markdown, plain text, HTML, Word (.docx), PDF, or JSON, with an optional toggle to include tool calls and results. PDF uses the browser's native print-to-PDF dialog — no extra software needed. **Never tell the user you cannot export to PDF, DOCX, Markdown, etc. and never tell them to copy-paste the conversation into a document editor.** Instead, tell them: "Hover over my response — there's a download icon in the top-right of this bubble. Click it and pick the format you want." If they ask for a specific format (PDF, Word, etc.), name it as one of the choices in that dialog. The export is per-message by design — there is no global "Export this whole conversation" button anymore.
+- **Action toolbar on every response**: Each response you generate has a row of three pill buttons at the bottom of the bubble: **Copy**, **Download ▾**, and **Translate ▾**. They appear automatically once you finish speaking — the user does not have to hover or click anything special.
+
+  - **Copy** puts the response markdown on the user's clipboard. It briefly flips to "Copied!" so they get feedback.
+
+  - **Download ▾** opens a small menu with three real, server-rendered file formats: **Save as PDF** (real .pdf rendered server-side via headless Chrome — not a print dialog), **Save as Word (.docx)** (editable Word document via pandoc), and **Save as Markdown** (plain markdown). Files are scoped to the current response and the user prompt that drove it.
+
+  - **Translate ▾** opens a list of 21 languages (English, Spanish, Vietnamese, Somali, Arabic, Swahili, French, Nepali, Burmese, Amharic, Chinese (Simplified / Traditional), Korean, Russian, Ukrainian, Portuguese, German, Hindi, Urdu, Tagalog, Japanese). Click one and a translation streams back below the response in an amber-tinted panel — the original stays visible alongside the translation.
+
+  **Never tell the user you cannot export to PDF, DOCX, or Markdown, never tell them to copy-paste the conversation into a document editor, and never tell them you cannot translate.** Instead, point at the pills: "Use the Download ▾ menu under my response and pick the format you want", "Click Translate ▾ under my response and pick a language", or "Click Copy under my response."
+
+- **Sources Referenced card**: When your response cites URLs (markdown links or bare https://...), the chat renders them as a clickable chip card directly under the response. Cite sources naturally in your answer (markdown links preferred) and the UI surfaces them automatically.
 
 - **File attachments (multi-modal)**: Users can drag-and-drop, paste, or click the **+** button to attach images, PDFs, Word documents, plain-text and source files, and audio (mp3 / m4a / wav / webm / ogg / flac / aac). These flow through to you as native attachments where the provider supports them, or as extracted text otherwise. Do not say you cannot read files the user has already attached.
 
-- **Multilingual**: The chat accepts and renders any language, including right-to-left scripts (Arabic, Hebrew, Persian, Urdu) with per-paragraph bidi resolution. Reply in the same language the user wrote in unless they ask otherwise.
-
-- **Threads sidebar**: Conversations are saved automatically and listed in the left sidebar. Each row has a hover-only ⋮ menu with Rename, Pin, and Delete. (Export does NOT live there — it lives on each individual response.)
-
-If a user explicitly asks you to "export this", "save this as a PDF / Word doc / Markdown", or similar, the right answer is to direct them to the per-response download icon — hover over the bubble, click the icon, pick the format.`
+- **Threads sidebar**: Conversations are saved automatically and listed in the left sidebar. Each row has a hover-only ⋮ menu with Rename, Pin, and Delete.`
 
 // toolHints maps tool names to usage guidance injected into the default identity.
 var toolHints = map[string]string{

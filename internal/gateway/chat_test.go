@@ -93,15 +93,25 @@ func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
 	} {
 		assert.NotContains(t, html, gone, "expected pre-sidebar element %q to be gone", gone)
 	}
-	// Per-message Export hook — the assistant bubble factory always
-	// attaches a .msg-export-btn, and the dialog branch on perMessage
-	// is what swaps the heading from "Export conversation" to
-	// "Export this response". If either disappears, per-message
-	// export is silently broken.
-	assert.Contains(t, html, "msg-export-btn",
-		"per-bubble Export button class must be in the served HTML")
-	assert.Contains(t, html, "Export this response",
-		"per-message export dialog heading must be in the served HTML")
+	// Per-response action toolbar — the assistant bubble factory
+	// always attaches Copy / Download ▾ / Translate ▾ pills. The
+	// label strings ride along inside the JS bundle so we can
+	// assert on the exact text the user will see.
+	for _, want := range []string{
+		"msg-toolbar",
+		"msg-pill",
+		"buildAssistantToolbar",
+		"buildDownloadDropdown",
+		"buildTranslateDropdown",
+		"Save as PDF",
+		"Save as Word (.docx)",
+		"Save as Markdown",
+		"translateLanguages",
+		"Sources Referenced",
+	} {
+		assert.Contains(t, html, want,
+			"expected per-response toolbar / sources hook %q in served HTML", want)
+	}
 
 	// Allowed MIME list (UI side) must mirror the server allowlist.
 	for mime := range allowedAttachmentMimes {

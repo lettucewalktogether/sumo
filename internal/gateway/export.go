@@ -25,6 +25,7 @@ const (
 	ExportHTML     ExportFormat = "html"
 	ExportDocx     ExportFormat = "docx"
 	ExportJSON     ExportFormat = "json"
+	ExportPDF      ExportFormat = "pdf"
 )
 
 // ExportHandlers is the handler set for /api/session/export.
@@ -158,9 +159,25 @@ func NewExportHandlers(store *session.Store) *ExportHandlers {
 				body = out
 				contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 				ext = "docx"
+			case ExportPDF:
+				// Real .pdf via chromedp's PrintToPDF — Felix already
+				// depends on chromedp for the browser tool, so no new
+				// system dependency. The HTML render is the same one
+				// the html/print fallback used; chromedp prints it
+				// with a real page layout instead of relying on the
+				// user's browser print dialog.
+				html := renderConversationHTML(entries, displayName, includeTools)
+				out, err := renderHTMLToPDF(r.Context(), html)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				body = out
+				contentType = "application/pdf"
+				ext = "pdf"
 			default:
 				http.Error(w, "unsupported format: "+string(format)+
-					" (md, txt, html, docx, json)", http.StatusBadRequest)
+					" (md, txt, html, docx, pdf, json)", http.StatusBadRequest)
 				return
 			}
 

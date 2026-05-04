@@ -821,6 +821,7 @@ func StartGateway(configPath, version string, opts ...Options) (*Result, error) 
 			return cfg
 		}),
 		Export:    gateway.NewExportHandlers(sessionStore),
+		Translate: gateway.NewTranslateHandlers(wsHandler),
 		LogBuffer: logBuf,
 	})
 
