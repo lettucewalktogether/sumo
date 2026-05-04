@@ -34,7 +34,26 @@ const (
 	// extractionTimeout bounds the wall-clock cost of a single shell
 	// extractor invocation.
 	extractionTimeout = 30 * time.Second
+
+	// maxConcurrentExtractions caps the number of pdftotext / pandoc
+	// processes running simultaneously across the whole gateway. With
+	// the per-message attachment count cap of 20, a single chat.send
+	// could otherwise spawn 20 extractor processes at once, and
+	// concurrent messages would multiply that. 4 is roughly aligned
+	// with typical CPU cores on a developer laptop and bounds local
+	// resource use without serialising attachments meaningfully (the
+	// extractors are I/O-bound for typical PDFs).
+	maxConcurrentExtractions = 4
 )
+
+// extractorSem is a buffered-channel semaphore that gates concurrent
+// invocations of runExtractor. Capacity = maxConcurrentExtractions.
+// Each runExtractor call sends an empty struct before spawning the
+// child process and drains it on return; a 5th concurrent call
+// blocks on the send until one of the running extractions finishes.
+// Bounded by the parent decode timeout (60 s in handleChatSend) so a
+// stuck queue can't hang the WebSocket forever.
+var extractorSem = make(chan struct{}, maxConcurrentExtractions)
 
 // allowedTextMimes lists application/* and other non-image MIMEs whose
 // payload is safe to UTF-8 decode and inline directly. text/* is
@@ -173,9 +192,23 @@ func extractAttachmentText(ctx context.Context, mime string, data []byte) (strin
 // captured stdout, capped at maxExtractedOutputBytes. Wrapped errors
 // distinguish missing-binary, timeout, and non-zero-exit cases so the
 // chat client can surface a useful hint to the user.
+//
+// Bounded by extractorSem to maxConcurrentExtractions concurrent
+// processes globally — a chat.send with 20 PDFs spawns at most 4
+// pdftotext invocations at once; the rest queue. The queue wait is
+// itself bounded by parentCtx, which the gateway sets to a 60 s
+// decode budget.
 func runExtractor(parentCtx context.Context, ex extractorBinary, data []byte) (string, error) {
 	if _, err := exec.LookPath(ex.bin); err != nil {
 		return "", fmt.Errorf("%s not found on PATH (%s)", ex.bin, ex.pkgHint)
+	}
+
+	// Acquire semaphore slot or fail fast on parent cancel.
+	select {
+	case extractorSem <- struct{}{}:
+		defer func() { <-extractorSem }()
+	case <-parentCtx.Done():
+		return "", fmt.Errorf("extraction queue: %w", parentCtx.Err())
 	}
 
 	ctx, cancel := context.WithTimeout(parentCtx, extractionTimeout)
