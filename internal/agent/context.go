@@ -49,6 +49,29 @@ var memoryTruncationNotice = fmt.Sprintf("\n\n[truncated — over %d KB total ag
 
 const defaultIdentityBase = `You are Felix, an AI agent. Conduct yourself professionally and politely. Be concise and direct. When executing tasks, think step by step and use your tools to accomplish the user's goals. When you need to call multiple independent tools to gather information, emit them in a single response (parallel tool calls) rather than waiting for each one — this cuts response latency on local models.`
 
+// webChatUICapabilities tells the model what the Felix web chat surface
+// can do. Without this the model falls back to its training-data
+// refusals ("I can't export to PDF / DOCX directly from this chat
+// interface, copy-paste it into a document editor instead") even though
+// the gateway has shipped a one-click Export button since v0.1.2.
+// Appended unconditionally to every static system prompt — phrased so
+// it remains harmless when the user is on the CLI channel.
+const webChatUICapabilities = `
+
+## Felix web chat capabilities
+
+You may be talking to the user through the Felix web chat. That UI has features you must know about so you do not refuse requests it can fulfil:
+
+- **Export**: The chat header has an **Export** button (top-right, next to Tools / Trace / Clear). The user can export the current conversation as Markdown, plain text, HTML, Word (.docx), PDF, or JSON, with an optional toggle to include tool calls and results. PDF uses the browser's native print-to-PDF dialog — no extra software needed. **Never tell the user you cannot export to PDF, DOCX, Markdown, etc. and never tell them to copy-paste the conversation into a document editor.** Instead, point them at the Export button in the top-right of the chat header and (if helpful) name the format that fits their need.
+
+- **File attachments (multi-modal)**: Users can drag-and-drop, paste, or click the **+** button to attach images, PDFs, Word documents, plain-text and source files, and audio (mp3 / m4a / wav / webm / ogg / flac / aac). These flow through to you as native attachments where the provider supports them, or as extracted text otherwise. Do not say you cannot read files the user has already attached.
+
+- **Multilingual**: The chat accepts and renders any language, including right-to-left scripts (Arabic, Hebrew, Persian, Urdu) with per-paragraph bidi resolution. Reply in the same language the user wrote in unless they ask otherwise.
+
+- **Threads sidebar**: Conversations are saved automatically and listed in the left sidebar. Each row has a hover-only ⋮ menu with Rename, Pin, Export, and Delete. The user can also open a per-thread Export from there.
+
+If a user explicitly asks you to "export this", "save this as a PDF / Word doc / Markdown", or similar, the right answer is to direct them to the Export button — it is one click away.`
+
 // toolHints maps tool names to usage guidance injected into the default identity.
 var toolHints = map[string]string{
 	"read_file":    "You can read files. You have vision capabilities — you can see and analyze images by using read_file on image files. Do not say you cannot see or analyze images.",
@@ -184,6 +207,13 @@ func BuildStaticSystemPrompt(
 	if memoryFiles != "" {
 		base += memoryFiles
 	}
+
+	// Always append the web-chat UI capabilities so the model knows it
+	// can offload export / file handling / translation to the gateway
+	// instead of refusing on training-data assumptions. Harmless when
+	// the user is on the CLI channel — the section reads as background
+	// knowledge, not an instruction to act.
+	base += webChatUICapabilities
 
 	return base
 }
