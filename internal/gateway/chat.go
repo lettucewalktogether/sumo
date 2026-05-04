@@ -1510,9 +1510,13 @@ html.light #header .logo {
 					var row = document.createElement('button');
 					row.type = 'button';
 					row.className = 'session-row';
-					var isActive = s.active || s.key === activeSessionKey;
-					if (isActive) row.classList.add('active');
-					if (isActive) activeSessionKey = s.key;
+					// activeSessionKey is the single source of truth at
+					// render time. The server's s.active flag is used
+					// only to seed activeSessionKey in the session.list
+					// response handler. OR-ing here would let the
+					// cached server flag fight the optimistic local
+					// switch and leave two rows highlighted at once.
+					if (s.key === activeSessionKey) row.classList.add('active');
 					row.title = s.key;
 					row.textContent = s.key;
 					var meta = document.createElement('span');
