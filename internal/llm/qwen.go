@@ -307,6 +307,13 @@ func (p *QwenProvider) NormalizeToolSchema(tools []ToolDef) ([]ToolDef, []Diagno
 	return applyStripList(tools, openaiUnsupportedFields)
 }
 
+// Capabilities reports no native PDF or audio support for Qwen via
+// DashScope. PDFs fall through to the PR 2 server-side text-extraction
+// path; audio uploads are rejected at the gateway boundary.
+func (p *QwenProvider) Capabilities() Capabilities {
+	return Capabilities{NativePDF: false, NativeAudio: false}
+}
+
 // BuildEnableThinking maps a ReasoningMode to Qwen's enable_thinking
 // boolean. Returns (false, empty diag, false) when off or the model
 // doesn't support thinking. For any non-off mode on a supported model,

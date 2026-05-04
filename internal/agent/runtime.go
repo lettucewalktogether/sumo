@@ -293,11 +293,33 @@ func isFileTool(name string) bool {
 }
 
 // Run executes the agent loop for a user message, returning a channel of events.
-// images is an optional slice of image attachments to include with the user message.
-func (r *Runtime) Run(ctx context.Context, userMsg string, images []llm.ImageContent) (<-chan AgentEvent, error) {
+// images is an optional slice of image attachments to include with the user
+// message. documents and audio are optional native PDF / audio attachments
+// for providers whose Capabilities() advertises NativePDF / NativeAudio
+// (Anthropic for PDFs, Gemini for both); the gateway is responsible for
+// only passing these to capable providers — incompatible PDFs are
+// extracted to text before reaching this point.
+//
+// Unlike images, documents and audio are NOT persisted to the session
+// JSONL. They're attached to the first turn's user message and visible
+// to the model for that turn, then dropped — reloading a past
+// conversation shows the text only. This matches the existing
+// "attachments are per-turn" behaviour and avoids ballooning session
+// files with multi-megabyte PDF/audio bytes.
+func (r *Runtime) Run(ctx context.Context, userMsg string, images []llm.ImageContent, documents []llm.DocumentContent, audio []llm.AudioContent) (<-chan AgentEvent, error) {
 	r.events = make(chan AgentEvent, 100)
 	tr := TraceFrom(ctx)
-	tr.Mark("agent.run.start", "user_msg_len", len(userMsg), "images", len(images))
+	tr.Mark("agent.run.start",
+		"user_msg_len", len(userMsg),
+		"images", len(images),
+		"documents", len(documents),
+		"audio", len(audio))
+
+	// Captured by the assembleMessages post-processing closure below.
+	// Cleared after the first iteration so subsequent loop turns
+	// (tool-call follow-ups) don't re-attach the same bytes.
+	pendingDocs := documents
+	pendingAudio := audio
 
 	go func() {
 		defer close(r.events)
@@ -429,6 +451,27 @@ func (r *Runtime) Run(ctx context.Context, userMsg string, images []llm.ImageCon
 
 			history := r.Session.View()
 			msgs := assembleMessages(history)
+
+			// Attach this turn's native documents / audio to the latest
+			// user message in the assembled list. Done once per Run call —
+			// after the first iteration the pending fields are cleared so
+			// subsequent loop iterations (driven by tool-call follow-ups)
+			// don't re-attach the bytes. Not persisted to the session
+			// (UserMessageEntry above is text-only), so reload of an old
+			// conversation will show the user's prompt without the PDF/
+			// audio attachments — matching the existing image behaviour
+			// for the chat client.
+			if len(pendingDocs) > 0 || len(pendingAudio) > 0 {
+				for i := len(msgs) - 1; i >= 0; i-- {
+					if msgs[i].Role == "user" && msgs[i].ToolCallID == "" {
+						msgs[i].Documents = append(msgs[i].Documents, pendingDocs...)
+						msgs[i].Audio = append(msgs[i].Audio, pendingAudio...)
+						break
+					}
+				}
+				pendingDocs = nil
+				pendingAudio = nil
+			}
 
 			// Prune oversized tool results — spill to workspace when both
 			// workspace and session key are available, otherwise truncate
@@ -859,8 +902,11 @@ func (r *Runtime) Run(ctx context.Context, userMsg string, images []llm.ImageCon
 }
 
 // RunSync is a convenience method that runs the agent and collects the full text response.
+// Native documents and audio are not exposed here — RunSync is used by
+// programmatic callers (cron, subagents) that don't surface attachments;
+// the chat UI uses Run directly with the full attachment plumbing.
 func (r *Runtime) RunSync(ctx context.Context, userMsg string, images []llm.ImageContent) (string, error) {
-	events, err := r.Run(ctx, userMsg, images)
+	events, err := r.Run(ctx, userMsg, images, nil, nil)
 	if err != nil {
 		return "", err
 	}

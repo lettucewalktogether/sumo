@@ -122,7 +122,10 @@ func inheritParentHistory(dst, src *session.Session) {
 type subagentRunnerAdapter struct{ rt *Runtime }
 
 func (s *subagentRunnerAdapter) Run(ctx context.Context, prompt string) (<-chan tools.AgentEventLike, error) {
-	raw, err := s.rt.Run(ctx, prompt, nil)
+	// Subagents don't carry user-uploaded attachments — they're
+	// programmatic dispatches via the task tool with text-only
+	// prompts.
+	raw, err := s.rt.Run(ctx, prompt, nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}

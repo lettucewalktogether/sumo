@@ -339,6 +339,18 @@ func (p *AnthropicProvider) NormalizeToolSchema(tools []ToolDef) ([]ToolDef, []D
 	return tools, nil
 }
 
+// Capabilities reports Anthropic's native multi-modal surface.
+//   - NativePDF: yes — Claude 3.5 Sonnet and later accept PDFs as
+//     document content blocks (base64 inline). Layout, tables, and
+//     embedded images are preserved, which the server-side text-
+//     extraction fallback would otherwise lose.
+//   - NativeAudio: no — Anthropic doesn't accept audio attachments
+//     today. The gateway rejects audio uploads on Anthropic-only
+//     agents.
+func (p *AnthropicProvider) Capabilities() Capabilities {
+	return Capabilities{NativePDF: true, NativeAudio: false}
+}
+
 // AnthropicThinkingConfig is a provider-internal representation of
 // Anthropic's thinking config. Exported for testability — production
 // code uses BuildThinkingConfig and wires the result into the SDK
@@ -416,11 +428,34 @@ func buildAnthropicMessages(in []Message, cacheLast bool) []anthropic.MessagePar
 					blocks = append(blocks, buildToolResultBlock(cur))
 				}
 				msgs = append(msgs, anthropic.NewUserMessage(blocks...))
-			} else if len(m.Images) > 0 {
+			} else if len(m.Images) > 0 || len(m.Documents) > 0 {
 				var blocks []anthropic.ContentBlockParamUnion
 				for _, img := range m.Images {
 					encoded := base64.StdEncoding.EncodeToString(img.Data)
 					blocks = append(blocks, anthropic.NewImageBlockBase64(img.MimeType, encoded))
+				}
+				// Documents (PDFs) ride alongside images as native
+				// document content blocks. Claude 3.5 Sonnet+ accepts
+				// these via base64 inline. Layout, tables, and
+				// embedded images are preserved end-to-end — the
+				// gateway's PR 2 server-side text-extraction path is
+				// only used as a fallback for providers without
+				// native PDF support.
+				for _, doc := range m.Documents {
+					encoded := base64.StdEncoding.EncodeToString(doc.Data)
+					blocks = append(blocks, anthropic.ContentBlockParamUnion{
+						OfDocument: &anthropic.DocumentBlockParam{
+							Source: anthropic.DocumentBlockParamSourceUnion{
+								// MediaType / Type fields can be elided per
+								// the SDK — they default to "application/pdf"
+								// and "base64" respectively, which is what we
+								// want for every PDF the chat UI uploads.
+								OfBase64: &anthropic.Base64PDFSourceParam{
+									Data: encoded,
+								},
+							},
+						},
+					})
 				}
 				if m.Content != "" {
 					blocks = append(blocks, anthropic.NewTextBlock(m.Content))

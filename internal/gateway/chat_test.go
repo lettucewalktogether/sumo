@@ -70,6 +70,7 @@ func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
 		`id="i-pencil"`,
 		`id="i-pin"`,
 		`id="i-trash"`,
+		`id="i-export"`,
 	} {
 		assert.Contains(t, html, want, "expected element %q in served HTML", want)
 	}

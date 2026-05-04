@@ -374,7 +374,7 @@ func TestRuntimeRun(t *testing.T) {
 		MaxTurns:  5,
 	}
 
-	events, err := rt.Run(context.Background(), "hi", nil)
+	events, err := rt.Run(context.Background(), "hi", nil, nil, nil)
 	require.NoError(t, err)
 
 	var textParts []string
@@ -434,7 +434,7 @@ func TestRuntimeRunWithToolCalls(t *testing.T) {
 		MaxTurns:  5,
 	}
 
-	events, err := rt.Run(context.Background(), "read test.txt", nil)
+	events, err := rt.Run(context.Background(), "read test.txt", nil, nil, nil)
 	require.NoError(t, err)
 
 	var gotToolResult bool
@@ -746,7 +746,7 @@ func TestCompactionMessageCapHonored(t *testing.T) {
 
 	// With cap=10, the existing 24+ messages exceed it; compaction MUST fire.
 	rt := makeRT(10)
-	events, err := rt.Run(context.Background(), "go", nil)
+	events, err := rt.Run(context.Background(), "go", nil, nil, nil)
 	require.NoError(t, err)
 	var sawCompaction bool
 	for e := range events {
@@ -759,7 +759,7 @@ func TestCompactionMessageCapHonored(t *testing.T) {
 	// With cap=0 (disabled) and a high-window model that won't hit the
 	// token threshold, compaction MUST NOT fire.
 	rt = makeRT(0)
-	events, err = rt.Run(context.Background(), "go", nil)
+	events, err = rt.Run(context.Background(), "go", nil, nil, nil)
 	require.NoError(t, err)
 	sawCompaction = false
 	for e := range events {
@@ -813,7 +813,7 @@ func TestRun_AbortMidDispatchProducesPairedSession(t *testing.T) {
 		MaxTurns: 5,
 	}
 
-	events, err := r.Run(ctx, "go", nil)
+	events, err := r.Run(ctx, "go", nil, nil, nil)
 	require.NoError(t, err)
 
 	var toolResultEvents, abortedEvents int
@@ -943,7 +943,7 @@ func TestRun_ResumeAfterAbortIsValidAPIRequest(t *testing.T) {
 		MaxTurns: 5,
 	}
 
-	events, err := r.Run(ctx, "go", nil)
+	events, err := r.Run(ctx, "go", nil, nil, nil)
 	require.NoError(t, err)
 
 	// Count events to harden against double-emit / swallow regressions.
@@ -1034,7 +1034,7 @@ func TestRun_DenyPolicyShortCircuitsExecution(t *testing.T) {
 		MaxTurns:   2,
 	}
 
-	events, err := r.Run(context.Background(), "go", nil)
+	events, err := r.Run(context.Background(), "go", nil, nil, nil)
 	require.NoError(t, err)
 
 	var resultEvents int
@@ -1106,7 +1106,7 @@ func TestRun_ParallelReadsExecuteConcurrently(t *testing.T) {
 		MaxTurns: 5,
 	}
 
-	events, err := r.Run(context.Background(), "go", nil)
+	events, err := r.Run(context.Background(), "go", nil, nil, nil)
 	require.NoError(t, err)
 	for range events {
 	}
@@ -1137,7 +1137,7 @@ func TestRun_UnsafeToolBreaksBatch(t *testing.T) {
 		MaxTurns: 5,
 	}
 
-	events, err := r.Run(context.Background(), "go", nil)
+	events, err := r.Run(context.Background(), "go", nil, nil, nil)
 	require.NoError(t, err)
 	for range events {
 	}
@@ -1170,7 +1170,7 @@ func TestRun_AbortDuringParallelBatch(t *testing.T) {
 		MaxTurns: 5,
 	}
 
-	events, err := r.Run(ctx, "go", nil)
+	events, err := r.Run(ctx, "go", nil, nil, nil)
 	require.NoError(t, err)
 
 	var resultEvents, abortedEvents int
@@ -1389,7 +1389,7 @@ func TestRun_FilterToolDefsHidesDeniedTools(t *testing.T) {
 		MaxTurns:   1,
 	}
 
-	events, err := r.Run(context.Background(), "go", nil)
+	events, err := r.Run(context.Background(), "go", nil, nil, nil)
 	require.NoError(t, err)
 	for range events {
 	}

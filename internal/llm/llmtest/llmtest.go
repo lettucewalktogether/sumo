@@ -32,6 +32,11 @@ func (Base) NormalizeToolSchema(tools []llm.ToolDef) ([]llm.ToolDef, []llm.Diagn
 	return tools, nil
 }
 
+// Capabilities returns the zero value (no native PDF, no native audio)
+// — the conservative default for test stubs. Tests that need a
+// capable provider can compose this with their own override.
+func (Base) Capabilities() llm.Capabilities { return llm.Capabilities{} }
+
 // Stub is a configurable LLMProvider for tests.
 type Stub struct {
 	Base

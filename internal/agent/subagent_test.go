@@ -241,7 +241,7 @@ func TestRun_SubagentEventsForwardedToParent(t *testing.T) {
 		task: tools.NewTaskTool(factory, parent.Depth, cfg.EligibleSubagents()),
 	}
 
-	events, err := parent.Run(context.Background(), "go", nil)
+	events, err := parent.Run(context.Background(), "go", nil, nil, nil)
 	require.NoError(t, err)
 
 	var subagentDeltas []string
@@ -431,7 +431,7 @@ func TestRun_SubagentAbortPropagatesFromParent(t *testing.T) {
 		cancel()
 	}()
 
-	events, err := parent.Run(ctx, "go", nil)
+	events, err := parent.Run(ctx, "go", nil, nil, nil)
 	require.NoError(t, err)
 	for range events {
 		// drain
