@@ -237,6 +237,25 @@ body {
 }
 .btn-primary:hover { background: var(--color-primary-hover); }
 .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-secondary {
+	display: inline-flex;
+	align-items: center;
+	padding: 0.45rem 1rem;
+	background: transparent;
+	color: var(--color-text);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius);
+	font-size: 0.875rem;
+	font-weight: 500;
+	cursor: pointer;
+	transition: border-color 0.15s, color 0.15s;
+}
+.btn-secondary:hover { border-color: var(--color-primary); color: var(--color-primary); }
+#close-btn {
+	font-size: 1.3rem;
+	line-height: 1;
+	padding: 0.2rem 0.5rem;
+}
 .btn-icon {
 	background: var(--color-surface);
 	border: 1px solid var(--color-border);
@@ -486,8 +505,10 @@ html.dark .error-state { background: #450a0a; }
 	<h1>Felix Settings</h1>
 	<span class="spacer"></span>
 	<span id="status-msg"></span>
+	<button class="btn-secondary" id="cancel-btn" title="Discard changes and return to chat (Esc)">Cancel</button>
 	<button class="btn-primary" id="save-btn" disabled>Save</button>
 	<button class="btn-icon" id="theme-btn" title="Toggle light/dark mode">&#9790;</button>
+	<button class="btn-icon" id="close-btn" title="Close settings (Esc)" aria-label="Close settings">&times;</button>
 </div>
 <main>
 <div class="container">
@@ -524,12 +545,31 @@ html.dark .error-state { background: #450a0a; }
 <script>
 (function() {
 	var saveBtn = document.getElementById('save-btn');
+	var cancelBtn = document.getElementById('cancel-btn');
+	var closeBtn = document.getElementById('close-btn');
 	var statusMsg = document.getElementById('status-msg');
 	var themeBtn = document.getElementById('theme-btn');
 	var loading = document.getElementById('loading');
 	var settingsRoot = document.getElementById('settings-root');
 	var cfg = null;
+	var initialCfgJSON = ''; // pristine snapshot for dirty detection
 	var availableTools = []; // [{name, description}], populated from /settings/api/tools
+
+	// leave navigates back to the chat page. If the in-memory cfg
+	// differs from what was loaded (initialCfgJSON), prompt before
+	// discarding — matches the convention every modern settings UI
+	// uses for unsaved-edit safety. Skipping the confirm when nothing
+	// has changed keeps the common case (open settings, look around,
+	// hit Esc) friction-free.
+	function isDirty() {
+		if (!cfg || !initialCfgJSON) return false;
+		try { return JSON.stringify(cfg) !== initialCfgJSON; }
+		catch (_) { return false; }
+	}
+	function leave() {
+		if (isDirty() && !confirm('Discard unsaved changes?')) return;
+		window.location.assign('/chat');
+	}
 
 	// === Theme ===
 	function setTheme(mode) {
@@ -587,6 +627,11 @@ html.dark .error-state { background: #450a0a; }
 	]).then(function(results) {
 		cfg = results[0];
 		availableTools = (results[1] && results[1].tools) || [];
+		// Snapshot the pristine config so leave() can detect dirty
+		// edits and prompt before discarding. Captured AFTER any
+		// server-side defaults are applied so a no-op visit (open
+		// settings, hit Esc, leave) doesn't trigger the confirm.
+		try { initialCfgJSON = JSON.stringify(cfg); } catch (_) {}
 		loading.style.display = 'none';
 		settingsRoot.style.display = 'block';
 		render();
@@ -594,6 +639,37 @@ html.dark .error-state { background: #450a0a; }
 	}).catch(function(err) {
 		loading.className = 'error-state';
 		loading.textContent = 'Failed to load config: ' + err.message;
+	});
+
+	// === Exit paths ===
+	// Three ways to leave the settings page without saving:
+	//   1. Cancel button (visible next to Save)
+	//   2. × button (header far-right)
+	//   3. Escape key (anywhere on the page, except inside an input
+	//      that's actively eating Escape via stopPropagation)
+	// All route through leave(), which prompts iff there are
+	// unsaved edits.
+	if (cancelBtn) cancelBtn.addEventListener('click', leave);
+	if (closeBtn)  closeBtn.addEventListener('click', leave);
+	document.addEventListener('keydown', function(e) {
+		if (e.key !== 'Escape') return;
+		// If an inline edit (e.g. a contenteditable or a select with
+		// its dropdown open) wants to absorb Escape, let it. Default
+		// browser behaviour for input/textarea is to NOT cancel
+		// anything on Escape, so we can safely intercept.
+		var t = e.target;
+		var isFormControl = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
+		if (isFormControl) {
+			// Blur the field so the user gets immediate feedback that
+			// Escape was acknowledged, then leave on a second press.
+			// Avoids the surprise where typing in a field, then
+			// pressing Escape to abandon, drops you out of the page.
+			if (document.activeElement && document.activeElement.blur) {
+				document.activeElement.blur();
+				return;
+			}
+		}
+		leave();
 	});
 
 	// === Save ===
@@ -608,6 +684,11 @@ html.dark .error-state { background: #450a0a; }
 		.then(function(res) {
 			saveBtn.disabled = false;
 			if (res.data.ok) {
+				// Refresh the dirty-state snapshot so a subsequent
+				// Esc / Cancel / × press leaves silently rather than
+				// prompting about edits the user just successfully
+				// committed.
+				try { initialCfgJSON = JSON.stringify(cfg); } catch (_) {}
 				showStatus('Saved', false);
 			} else {
 				showStatus('Error: ' + (res.data.error || 'unknown'), true);
