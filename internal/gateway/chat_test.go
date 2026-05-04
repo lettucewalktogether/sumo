@@ -58,6 +58,8 @@ func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
 		`id="session-list"`,
 		`id="session-list-empty"`,
 		`id="sidebar-footer"`,
+		// Bug-report button — opens a prefilled GitHub issue.
+		`id="bug-report-btn"`,
 		`id="main-pane"`,
 		`id="messages-empty"`,
 		// Tabs + cog + Jobs surface added in PR 3.

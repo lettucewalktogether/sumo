@@ -139,7 +139,12 @@ func TestExport_HTMLIsValid(t *testing.T) {
 	// Print-friendly @media print is a key feature for the
 	// HTML→browser PDF flow.
 	assert.Contains(t, body, "@media print")
-	// XSS guard: payload-side text is HTML-escaped.
+	// XSS guard: payload-side raw HTML in the markdown source is
+	// stripped. goldmark runs in safe mode (Unsafe NOT enabled), so
+	// `<script>` tags inside a message are dropped and replaced with
+	// the standard "raw HTML omitted" marker rather than passed
+	// through. The active-payload form (executable script) must
+	// never appear in the output.
 	store2 := session.NewStore(t.TempDir())
 	xss, _ := store2.Load("a", "x")
 	xss.Append(session.UserMessageEntry(`<script>alert(1)</script> attempt`))
@@ -147,8 +152,8 @@ func TestExport_HTMLIsValid(t *testing.T) {
 	req2 := httptest.NewRequest("GET", "/api/session/export?agentId=a&sessionKey=x&format=html", nil)
 	rec2 := httptest.NewRecorder()
 	h2.Export(rec2, req2)
-	assert.Contains(t, rec2.Body.String(), "&lt;script&gt;")
-	assert.NotContains(t, rec2.Body.String(), "<script>alert(1)</script>")
+	assert.NotContains(t, rec2.Body.String(), "<script>alert(1)</script>",
+		"executable script must not survive into HTML export")
 }
 
 func TestExport_JSONIsLossless(t *testing.T) {
@@ -432,6 +437,56 @@ func TestExport_MessageIndexOutOfRange(t *testing.T) {
 	h.Export(rec, req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), "out of range")
+}
+
+// TestExport_HTMLRendersMarkdownNotLiteral catches the regression
+// where the HTML / PDF export htmlEscape'd the raw markdown body
+// and the user's PDF showed **bold**, # headings, and | tables |
+// as literal text. The renderer must produce real <strong>, <h1>,
+// <table> markup instead.
+func TestExport_HTMLRendersMarkdownNotLiteral(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	sess, err := store.Load("default", "k1")
+	require.NoError(t, err)
+	sess.Append(session.UserMessageEntry("ask"))
+	sess.Append(session.AssistantMessageEntry(
+		"# Big header\n\n" +
+			"Some **bold** and *italic* text with `code`.\n\n" +
+			"- bullet one\n" +
+			"- bullet two\n\n" +
+			"| Col A | Col B |\n" +
+			"| --- | --- |\n" +
+			"| cell-a | cell-b |\n",
+	))
+	h := NewExportHandlers(store)
+
+	req := httptest.NewRequest("GET",
+		"/api/session/export?agentId=default&sessionKey=k1&format=html", nil)
+	rec := httptest.NewRecorder()
+	h.Export(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+	body := rec.Body.String()
+
+	// Real markup, not literal markdown.
+	assert.Contains(t, body, "<h1", "# heading must become <h1>")
+	assert.Contains(t, body, "<strong>bold</strong>",
+		"**bold** must become <strong>")
+	assert.Contains(t, body, "<em>italic</em>",
+		"*italic* must become <em>")
+	assert.Contains(t, body, "<code>code</code>",
+		"`code` must become <code>")
+	assert.Contains(t, body, "<ul",
+		"- bullets must become <ul>/<li>")
+	assert.Contains(t, body, "<table",
+		"GFM | tables | must become <table>")
+	assert.Contains(t, body, "cell-a", "table cell content must survive")
+
+	// Old bug guard — these patterns appeared as literal text in the
+	// pre-goldmark export.
+	assert.NotContains(t, body, "**bold**",
+		"raw **bold** marker must not survive into HTML output")
+	assert.NotContains(t, body, "| Col A | Col B |",
+		"raw markdown table syntax must not survive as text")
 }
 
 // TestExport_MessageIndexNonInteger rejects garbage in the param.

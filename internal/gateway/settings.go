@@ -351,6 +351,21 @@ main { padding: 2rem 0 4rem; }
 	font-family: "SF Mono", "Fira Code", monospace;
 	font-size: 0.85rem;
 }
+/* Required-but-empty subagent description: red border + softer
+   inline hint. Lights up the moment Subagent is toggled on without
+   a description (live), so the user does not have to wait for a
+   server-side validation error. */
+.subagent-desc-group.required-empty textarea {
+	border-color: #dc2626;
+}
+.subagent-desc-group.required-empty > label::after {
+	content: " — required";
+	color: #dc2626;
+	font-weight: 600;
+}
+.subagent-desc-group.required-empty.flash textarea {
+	box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.18);
+}
 html.dark .form-group input,
 html.dark .form-group select,
 html.dark .form-group textarea { background: #0f172a; }
@@ -691,7 +706,15 @@ html.dark .error-state { background: #450a0a; }
 				try { initialCfgJSON = JSON.stringify(cfg); } catch (_) {}
 				showStatus('Saved', false);
 			} else {
-				showStatus('Error: ' + (res.data.error || 'unknown'), true);
+				var msg = res.data.error || 'unknown';
+				showStatus('Error: ' + msg, true);
+				// If the validation failure is the subagent-needs-
+				// description case, scroll the user straight to the
+				// missing field and focus it — the error banner sits
+				// at the top of the page, far from the textarea, so
+				// users frequently miss the connection.
+				var aid = parseSubagentDescError(msg);
+				if (aid) focusSubagentDesc(aid);
 			}
 		})
 		.catch(function(err) {
@@ -1027,6 +1050,57 @@ html.dark .error-state { background: #450a0a; }
 	}
 
 	// === Helper: form-group (label above input) ===
+	// updateSubagentDescRequired toggles the "required-empty" highlight
+	// on a single agent's description field based on the live
+	// (subagent && !description) state. Called by the subagent toggle
+	// and by the description input handler so the red border tracks
+	// the user's edits without a save round-trip.
+	function updateSubagentDescRequired(idx) {
+		var a = (cfg.agents && cfg.agents.list && cfg.agents.list[idx]) || null;
+		if (!a) return;
+		var groups = document.querySelectorAll('.subagent-desc-group');
+		for (var i = 0; i < groups.length; i++) {
+			var g = groups[i];
+			if (g.dataset.subagentDescAgentId !== (a.id || '')) continue;
+			var needs = !!a.subagent && !(a.description && String(a.description).trim());
+			g.classList.toggle('required-empty', needs);
+		}
+	}
+
+	// focusSubagentDesc finds the description field for the named
+	// agent, switches to the Agents tab if the user is on a different
+	// one, scrolls it into view, and focuses the textarea. Used after
+	// a save fails with the "subagent=true requires non-empty
+	// description" validation error so the user lands directly on the
+	// field they need to fill in.
+	function focusSubagentDesc(agentId) {
+		try { activateTab('agents'); } catch (_) {}
+		var groups = document.querySelectorAll('.subagent-desc-group');
+		for (var i = 0; i < groups.length; i++) {
+			var g = groups[i];
+			if (g.dataset.subagentDescAgentId !== agentId) continue;
+			g.classList.add('flash');
+			setTimeout(function() { g.classList.remove('flash'); }, 1800);
+			g.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			var ta = g.querySelector('textarea');
+			if (ta) {
+				setTimeout(function() { ta.focus(); }, 250);
+			}
+			return true;
+		}
+		return false;
+	}
+
+	// parseSubagentDescError pulls the agent ID out of the validation
+	// error string the server returns when Subagent is on but
+	// Description is empty. Server format (config.Validate):
+	//   agent "default": subagent=true requires non-empty description
+	function parseSubagentDescError(msg) {
+		if (!msg) return '';
+		var m = /agent\s+"([^"]+)":\s*subagent=true requires non-empty description/.exec(String(msg));
+		return m ? m[1] : '';
+	}
+
 	function makeField(parent, label, type, value, onChange) {
 		if (type === 'toggle') {
 			return makeToggle(parent, label, value, onChange);
@@ -1691,20 +1765,33 @@ html.dark .error-state { background: #450a0a; }
 
 				// Subagent group: opt-in flag + the description that the
 				// supervisor task tool shows to its LLM + inheritContext.
-				// Setting Subagent without a description is technically
-				// allowed but the supervisor will show "(no description)"
-				// in the tool spec, which makes routing unreliable.
+				// Description is REQUIRED when subagent=true (server
+				// validation in config.Validate). The toggle handler
+				// re-runs the live-required highlight so the textarea
+				// gets a red border the moment subagent flips on
+				// without a description.
 				var row2c = makeRow(item);
 				makeField(row2c, 'Subagent (callable via task tool)', 'toggle', !!a.subagent, function(v) {
 					cfg.agents.list[idx].subagent = v;
+					updateSubagentDescRequired(idx);
 				});
 				makeField(row2c, 'Inherit Context (subagent sees parent history)', 'toggle', !!a.inheritContext, function(v) {
 					cfg.agents.list[idx].inheritContext = v;
 				});
 
-				makeField(item, 'Subagent Description (shown to supervisor; required when Subagent is on)', 'textarea',
+				var descGroup = makeField(item, 'Subagent Description (shown to supervisor; required when Subagent is on)', 'textarea',
 					a.description || '',
-					function(v) { cfg.agents.list[idx].description = v; });
+					function(v) {
+						cfg.agents.list[idx].description = v;
+						updateSubagentDescRequired(idx);
+					});
+				// Tag the group so the save-error handler can scroll
+				// straight to the missing field, and so the live
+				// required-highlight can find it without walking the
+				// DOM.
+				descGroup.dataset.subagentDescAgentId = a.id || '';
+				descGroup.classList.add('subagent-desc-group');
+				updateSubagentDescRequired(idx);
 
 				makeReadOnlyField(item, 'Sandbox', 'agent-sandbox-' + idx, 'not implemented yet');
 

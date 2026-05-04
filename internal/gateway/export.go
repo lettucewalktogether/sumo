@@ -10,10 +10,58 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sausheong/felix/internal/session"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/renderer/html"
 )
+
+// exportMarkdown is the goldmark instance used by the HTML / PDF
+// export paths to turn each message's markdown into proper HTML.
+// Without this, **bold** / # headings / | tables | / * lists end
+// up html-escaped as literal text in the PDF rather than rendered
+// formatting. Uses the GFM extension set so tables, strikethrough,
+// task lists, and autolinks work the way a chat user expects.
+//
+// Configured once and reused — goldmark.Markdown is thread-safe.
+var (
+	exportMarkdownOnce sync.Once
+	exportMarkdownVal  goldmark.Markdown
+)
+
+func exportMarkdown() goldmark.Markdown {
+	exportMarkdownOnce.Do(func() {
+		exportMarkdownVal = goldmark.New(
+			goldmark.WithExtensions(extension.GFM),
+			goldmark.WithParserOptions(
+				parser.WithAutoHeadingID(),
+			),
+			goldmark.WithRendererOptions(
+				html.WithHardWraps(),
+				// Unsafe is not enabled — assistant text is rendered
+				// without raw HTML passthrough, so a model can't
+				// inject <script> via its response.
+			),
+		)
+	})
+	return exportMarkdownVal
+}
+
+// renderMessageMarkdownToHTML converts an assistant or user message's
+// markdown body into an HTML fragment safe to drop inside the export
+// document. Errors fall back to html-escaped plain text so a malformed
+// response can't break the export.
+func renderMessageMarkdownToHTML(md string) string {
+	var buf bytes.Buffer
+	if err := exportMarkdown().Convert([]byte(md), &buf); err != nil {
+		return htmlEscape(md)
+	}
+	return buf.String()
+}
 
 // ExportFormat is one of the supported output formats for a session
 // export. The HTTP handler routes on the format query string.
@@ -399,14 +447,47 @@ func renderConversationHTML(entries []session.SessionEntry, title string, includ
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
        max-width: 7.5in; margin: 1in auto; line-height: 1.5; color: #1a1a1a; }
 h1 { border-bottom: 2px solid #ccc; padding-bottom: 0.4em; }
-h2 { margin-top: 2em; color: #2a4d8f; font-size: 1.1em; }
-h2.you { color: #1f6f3f; }
+h2.role { margin-top: 1.6em; margin-bottom: 0.4em; color: #2a4d8f; font-size: 1.1em; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; }
+h2.role.you { color: #1f6f3f; }
 .meta { color: #666; font-size: 0.85em; margin-bottom: 2em; }
-.msg { margin: 0.4em 0 1.4em; white-space: pre-wrap; }
+.msg { margin: 0 0 1.4em; }
 .msg .bubble { unicode-bidi: plaintext; }
-pre { background: #f4f4f6; padding: 0.6em 0.8em; border-radius: 4px; overflow-x: auto;
-      font-size: 0.85em; }
-code { font-family: "SF Mono", "Fira Code", Menlo, monospace; }
+.msg .bubble > *:first-child { margin-top: 0; }
+.msg .bubble > *:last-child  { margin-bottom: 0; }
+.msg .bubble h1 { font-size: 1.4em; border: 0; padding: 0; margin: 0.8em 0 0.35em; }
+.msg .bubble h2 { font-size: 1.2em; color: #1a1a1a; margin: 0.7em 0 0.3em; text-transform: none; letter-spacing: 0; font-weight: 700; }
+.msg .bubble h3 { font-size: 1.05em; margin: 0.65em 0 0.25em; font-weight: 700; }
+.msg .bubble h4, .msg .bubble h5, .msg .bubble h6 { font-size: 1em; margin: 0.55em 0 0.2em; font-weight: 700; }
+.msg .bubble p  { margin: 0.55em 0; }
+.msg .bubble ul, .msg .bubble ol { margin: 0.55em 0 0.55em 1.6em; padding: 0; }
+.msg .bubble li { margin: 0.2em 0; }
+.msg .bubble blockquote {
+    border-left: 3px solid #d1d5db; margin: 0.7em 0; padding: 0.2em 0.9em;
+    color: #4b5563; background: #f9fafb;
+}
+.msg .bubble hr { border: 0; border-top: 1px solid #e5e7eb; margin: 1.2em 0; }
+.msg .bubble table {
+    border-collapse: collapse; margin: 0.8em 0; width: 100%%;
+    font-size: 0.92em;
+}
+.msg .bubble th, .msg .bubble td {
+    border: 1px solid #d1d5db; padding: 0.45em 0.7em; text-align: left; vertical-align: top;
+}
+.msg .bubble th { background: #f3f4f6; font-weight: 700; }
+.msg .bubble tr:nth-child(even) td { background: #fafafa; }
+.msg .bubble a { color: #1d4ed8; text-decoration: underline; }
+.msg .bubble strong { font-weight: 700; }
+.msg .bubble em     { font-style: italic; }
+.msg .bubble code {
+    font-family: "SF Mono", "Fira Code", Menlo, monospace;
+    background: #f3f4f6; padding: 0.05em 0.35em; border-radius: 3px; font-size: 0.92em;
+}
+.msg .bubble pre {
+    background: #0f172a; color: #e5e7eb; padding: 0.7em 0.95em;
+    border-radius: 6px; overflow-x: auto; font-size: 0.85em;
+    margin: 0.7em 0;
+}
+.msg .bubble pre code { background: transparent; color: inherit; padding: 0; font-size: 1em; }
 .tool-call, .tool-result {
     background: #fafafa; border-left: 3px solid #ccc; padding: 0.4em 0.8em; margin: 0.6em 0;
     font-size: 0.9em;
@@ -415,7 +496,8 @@ code { font-family: "SF Mono", "Fira Code", Menlo, monospace; }
 .tool-result.error { border-color: #c33; }
 @media print {
     body { margin: 0.6in; max-width: none; }
-    h2 { page-break-after: avoid; }
+    h2.role, .msg .bubble h1, .msg .bubble h2, .msg .bubble h3 { page-break-after: avoid; }
+    .msg, .msg .bubble pre, .msg .bubble table { page-break-inside: avoid; }
 }
 </style>
 </head>
@@ -434,14 +516,19 @@ code { font-family: "SF Mono", "Fira Code", Menlo, monospace; }
 			}
 			switch e.Role {
 			case "user":
-				sb.WriteString(`<h2 class="you">You</h2>`)
+				sb.WriteString(`<h2 class="role you">You</h2>`)
 			case "assistant":
-				sb.WriteString(`<h2>Assistant</h2>`)
+				sb.WriteString(`<h2 class="role">Assistant</h2>`)
 			default:
 				continue
 			}
+			// Render the message's markdown into real HTML rather
+			// than html-escaping the raw source — otherwise the
+			// PDF export shows **bold**, # headings, and | tables |
+			// as literal text instead of formatted output.
+			rendered := renderMessageMarkdownToHTML(strings.TrimSpace(md.Text))
 			fmt.Fprintf(&sb, "\n<div class=\"msg\"><div class=\"bubble\" dir=\"auto\">%s</div></div>\n",
-				htmlEscape(strings.TrimSpace(md.Text)))
+				rendered)
 		case session.EntryTypeToolCall:
 			if !includeTools {
 				continue

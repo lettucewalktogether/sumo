@@ -19,7 +19,11 @@ func NewChatHandler(port int, version string) http.HandlerFunc {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		// blob: in img-src is needed for the in-page attachment thumbnails
 		// generated via URL.createObjectURL on dropped/picked image files.
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src ws: wss:; img-src 'self' data: blob:")
+		// connect-src includes 'self' so the per-response Translate
+		// fetch (POST /api/translate) and any other same-origin XHR
+		// can run without being blocked. ws: / wss: stay for the
+		// chat WebSocket.
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data: blob:")
 		fmt.Fprintf(w, chatHTML, safeVersion, port)
 	}
 }
@@ -974,6 +978,9 @@ html.light #header .logo {
 	padding: 0.5rem 0.7rem 0.6rem;
 	border-top: 1px solid var(--border);
 	flex-shrink: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
 }
 #sidebar-footer #token-chip {
 	display: block;
@@ -984,6 +991,25 @@ html.light #header .logo {
 	padding: 0.3rem 0.5rem;
 	cursor: help;
 }
+#bug-report-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.4rem;
+	width: 100%%;
+	box-sizing: border-box;
+	padding: 0.4rem 0.6rem;
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	color: var(--text-muted);
+	font-size: 0.72rem;
+	font-family: inherit;
+	cursor: pointer;
+	transition: border-color 0.15s ease, color 0.15s ease;
+}
+#bug-report-btn:hover { border-color: var(--accent); color: var(--accent); }
+#bug-report-btn svg { flex-shrink: 0; }
 #sidebar-toggle {
 	background: none;
 	border: 1px solid var(--border);
@@ -1478,6 +1504,10 @@ html.light #header .logo {
 	</div>
 	<div id="sidebar-footer">
 		<span id="token-chip" title="Tokens used / context window">—</span>
+		<button id="bug-report-btn" type="button" title="Report a bug — opens a prefilled GitHub issue in a new tab">
+			<svg width="13" height="13" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2l1.88 1.88"></path><path d="M14.12 3.88L16 2"></path><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"></path><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6z"></path><path d="M12 20v-9"></path><path d="M6.53 9C4.6 8.8 3 7.1 3 5"></path><path d="M6 13H2"></path><path d="M3 21c0-2.1 1.7-3.8 3.8-4"></path><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"></path><path d="M22 13h-4"></path><path d="M17.2 17c2.1.2 3.8 1.9 3.8 4"></path></svg>
+			<span>Report a bug</span>
+		</button>
 	</div>
 </aside>
 <main id="main-pane">
@@ -1821,6 +1851,41 @@ html.light #header .logo {
 	// in tokens; populated from agent.status so switching agents
 	// updates the chip even before the first turn on that agent runs.
 	var tokenChip = document.getElementById('token-chip');
+	var bugReportBtn = document.getElementById('bug-report-btn');
+	if (bugReportBtn) {
+		bugReportBtn.addEventListener('click', function() {
+			// Build a prefilled GitHub issue URL with diagnostic
+			// fields so the user does not have to recall version /
+			// browser / OS by hand. URL-encoded, opened in a new
+			// tab. The repo lives at lettucewalktogether/sumo.
+			var versionEl = document.getElementById('sidebar-version');
+			var version = versionEl ? versionEl.textContent.trim() : 'unknown';
+			var ua = navigator.userAgent || 'unknown';
+			var platform = navigator.platform || 'unknown';
+			var lang = navigator.language || 'unknown';
+			var when = new Date().toISOString();
+			// Note: backticks (Markdown code spans) cannot appear in
+			// this Go raw string literal, so the diagnostics line
+			// uses plain quoting. GitHub's issue editor renders
+			// just fine without them.
+			var body =
+				'### What happened\n' +
+				'<!-- describe the bug — what you did, what you expected, what actually happened -->\n\n' +
+				'### Steps to reproduce\n' +
+				'1. \n2. \n3. \n\n' +
+				'### Diagnostics (auto-filled — please leave in)\n' +
+				'- Felix version: ' + version + '\n' +
+				'- Browser: ' + ua + '\n' +
+				'- Platform: ' + platform + '\n' +
+				'- Language: ' + lang + '\n' +
+				'- Submitted: ' + when + '\n';
+			var url = 'https://github.com/lettucewalktogether/sumo/issues/new?' +
+				'title=' + encodeURIComponent('[bug] ') +
+				'&labels=' + encodeURIComponent('bug') +
+				'&body=' + encodeURIComponent(body);
+			window.open(url, '_blank', 'noopener,noreferrer');
+		});
+	}
 	var agentWindows = {};
 	var lastUsage = null;
 	function fmtTokens(n) {
