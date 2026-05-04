@@ -18,7 +18,7 @@ import (
 // against accidentally deleting the file picker, drop zone, or chip
 // strip when refactoring the giant chatHTML constant.
 func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
-	srv := httptest.NewServer(NewChatHandler(18789))
+	srv := httptest.NewServer(NewChatHandler(18789, "v0.6.3-22-g9486572"))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL)
@@ -36,6 +36,11 @@ func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
 
 	// The port substitution itself must have happened.
 	assert.Contains(t, html, "var PORT = 18789;")
+	// Version substitution must produce a visible chip with the
+	// version we passed in. Catches regressions where a refactor
+	// drops the second %s slot or the brand element rename.
+	assert.Contains(t, html, `id="sidebar-version"`)
+	assert.Contains(t, html, "v0.6.3-22-g9486572")
 
 	// Attachment UI elements that the JS reaches for by id — if any
 	// rename the JS will silently break.
@@ -55,6 +60,10 @@ func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
 		`id="sidebar-footer"`,
 		`id="main-pane"`,
 		`id="messages-empty"`,
+		// Header export button — gives users a one-click way to export
+		// the current conversation without hunting through the per-row
+		// ⋮ menu.
+		`id="export-btn"`,
 		// Tabs + cog + Jobs surface added in PR 3.
 		`id="settings-btn"`,
 		`id="sidebar-tabs"`,
@@ -99,4 +108,34 @@ func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
 	// Sanity: no double-rendered template (would suggest the constant was
 	// substituted into itself somehow).
 	assert.Equal(t, 1, strings.Count(html, "<title>Felix Chat</title>"))
+}
+
+// TestSanitizeVersionString covers the input filter that protects the
+// chat HTML from a hostile version string. The output ends up
+// substituted into the page without further escaping, so anything
+// outside the documented charset (alnum + . - _ +) must be stripped.
+func TestSanitizeVersionString(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		// git describe forms — the realistic happy path
+		{"v0.6.3", "v0.6.3"},
+		{"v0.6.3-22-g9486572", "v0.6.3-22-g9486572"},
+		{"v0.6.3-22-g9486572-dirty", "v0.6.3-22-g9486572-dirty"},
+		{"v1.0.0+exp.sha.5114f85", "v1.0.0+exp.sha.5114f85"},
+		// edge inputs
+		{"", "dev"},
+		{"   ", "dev"},
+		{"!@#$%^&*", "dev"},
+		// unsafe characters get stripped, safe ones preserved
+		{"v1.0<script>", "v1.0script"},
+		{"v1.0\"alert\"", "v1.0alert"},
+		{"v1.0' DROP TABLE", "v1.0DROPTABLE"},
+		// length cap
+		{strings.Repeat("a", 100), strings.Repeat("a", 40)},
+	}
+	for _, tc := range cases {
+		got := sanitizeVersionString(tc.in)
+		assert.Equal(t, tc.want, got, "input=%q", tc.in)
+	}
 }

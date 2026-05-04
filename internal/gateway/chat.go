@@ -3,10 +3,15 @@ package gateway
 import (
 	"fmt"
 	"net/http"
+	"strings"
 )
 
-// NewChatHandler returns an HTTP handler func that serves the chat web interface.
-func NewChatHandler(port int) http.HandlerFunc {
+// NewChatHandler returns an HTTP handler func that serves the chat web
+// interface. The version string is injected into the sidebar brand so
+// the running build is visible at a glance — sanitised through
+// sanitizeVersionString first since it ends up in raw HTML.
+func NewChatHandler(port int, version string) http.HandlerFunc {
+	safeVersion := sanitizeVersionString(version)
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -15,8 +20,39 @@ func NewChatHandler(port int) http.HandlerFunc {
 		// blob: in img-src is needed for the in-page attachment thumbnails
 		// generated via URL.createObjectURL on dropped/picked image files.
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src ws: wss:; img-src 'self' data: blob:")
-		fmt.Fprintf(w, chatHTML, port)
+		fmt.Fprintf(w, chatHTML, safeVersion, port)
 	}
+}
+
+// sanitizeVersionString limits the version string to characters that
+// are safe to drop directly into HTML without further escaping. git
+// describe output is always within this set; a hostile build that
+// somehow produces other characters gets them stripped rather than
+// trusted into the page. Empty input falls back to "dev".
+func sanitizeVersionString(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "dev"
+	}
+	var b strings.Builder
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '.', r == '-', r == '_', r == '+':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "dev"
+	}
+	const maxLen = 40
+	out := b.String()
+	if len(out) > maxLen {
+		out = out[:maxLen]
+	}
+	return out
 }
 
 const chatHTML = `<!DOCTYPE html>
@@ -317,7 +353,8 @@ html.light #header .logo {
 	color: var(--text);
 	transition: border-color 0.3s;
 }
-#clear-btn {
+#clear-btn,
+#export-btn {
 	background: none;
 	border: 1px solid var(--border);
 	border-radius: 6px;
@@ -328,6 +365,8 @@ html.light #header .logo {
 	color: var(--text);
 	transition: border-color 0.3s;
 }
+#export-btn:hover { border-color: var(--accent); color: var(--accent); }
+#export-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 #messages {
 	flex: 1;
 	overflow-y: auto;
@@ -341,6 +380,7 @@ html.light #header .logo {
 	padding: 0.75rem 1rem;
 	border-radius: 12px;
 	line-height: 1.5;
+	font-size: 0.9rem;
 	word-wrap: break-word;
 	overflow-wrap: break-word;
 	transition: background 0.3s, border-color 0.3s;
@@ -725,6 +765,19 @@ html.light #header .logo {
 	font-weight: 600;
 	color: var(--accent);
 	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+#sidebar-version {
+	font-size: 0.62rem;
+	font-weight: 400;
+	color: var(--text-muted);
+	font-family: "SF Mono", "Fira Code", monospace;
+	letter-spacing: 0.01em;
+	margin-left: 0.3rem;
+	vertical-align: middle;
 }
 #new-chat-btn {
 	display: flex;
@@ -933,7 +986,7 @@ html.light #header .logo {
 	border-radius: 6px;
 	padding: 0.5rem 0.6rem 0.55rem;
 	color: var(--text-em);
-	font-size: 0.83rem;
+	font-size: 0.88rem;
 	cursor: pointer;
 	margin-bottom: 1px;
 }
@@ -954,7 +1007,7 @@ html.light #header .logo {
 }
 .session-row .row-preview {
 	display: block;
-	font-size: 0.7rem;
+	font-size: 0.75rem;
 	color: var(--text-muted);
 	margin-top: 0.15rem;
 	white-space: nowrap;
@@ -1340,7 +1393,7 @@ html.light #header .logo {
 <div id="layout">
 <aside id="sidebar">
 	<div id="sidebar-header">
-		<span id="sidebar-brand">Felix</span>
+		<span id="sidebar-brand">Felix <span id="sidebar-version" title="Felix gateway version">%s</span></span>
 		<button id="settings-btn" type="button" title="Open settings" aria-label="Open settings"><svg class="icon"><use href="#i-cog"/></svg></button>
 	</div>
 	<div id="sidebar-tabs" role="tablist">
@@ -1369,6 +1422,7 @@ html.light #header .logo {
 	<span class="spacer"></span>
 	<button id="toggle-tools-btn" title="Hide/show tool calls">Tools</button>
 	<button id="toggle-trace-btn" title="Hide/show live trace panel">Trace</button>
+	<button id="export-btn" title="Export this conversation as Markdown, Text, HTML, Word, PDF, or JSON">Export</button>
 	<button id="clear-btn" title="Clear session">Clear</button>
 	<button id="theme-btn" title="Toggle light/dark mode" aria-label="Toggle theme">&#9790;</button>
 	<span id="conn-status" class="connecting">connecting</span>
@@ -1415,6 +1469,7 @@ html.light #header .logo {
 	var connStatus = document.getElementById('conn-status');
 	var themeBtn = document.getElementById('theme-btn');
 	var clearBtn = document.getElementById('clear-btn');
+	var exportBtn = document.getElementById('export-btn');
 	var stopBtn = document.getElementById('stop-btn');
 	var agentSelect = document.getElementById('agent-select');
 	var newChatBtn = document.getElementById('new-chat-btn');
@@ -1871,6 +1926,20 @@ html.light #header .logo {
 		clearMessagesPane();
 		resetTokenChip();
 		loadSessions();
+	});
+
+	// Export the active conversation. Resolves the session record from
+	// sessionsCache so the dialog can show the friendly name; falls back
+	// to a minimal stub when the cache hasn't loaded yet (the server
+	// only needs the key).
+	exportBtn.addEventListener('click', function() {
+		if (!activeSessionKey) return;
+		var s = null;
+		for (var i = 0; i < sessionsCache.length; i++) {
+			if (sessionsCache[i].key === activeSessionKey) { s = sessionsCache[i]; break; }
+		}
+		if (!s) s = { key: activeSessionKey, name: '', preview: '' };
+		openExportDialog(s);
 	});
 
 	agentSelect.addEventListener('change', function() {
