@@ -351,6 +351,23 @@ main { padding: 2rem 0 4rem; }
 	font-family: "SF Mono", "Fira Code", monospace;
 	font-size: 0.85rem;
 }
+/* Helper line that shows under a field — explains what the field
+   means and gives concrete sample values. Sized small so several
+   fields per row stay scannable. */
+.field-help {
+	margin-top: 0.35rem;
+	font-size: 0.78rem;
+	color: var(--color-text-muted);
+	line-height: 1.4;
+}
+.field-help code {
+	font-family: "SF Mono", "Fira Code", Menlo, monospace;
+	background: var(--color-bg);
+	border: 1px solid var(--color-border);
+	border-radius: 3px;
+	padding: 0 0.25rem;
+	font-size: 0.92em;
+}
 /* Required-but-empty subagent description: red border + softer
    inline hint. Lights up the moment Subagent is toggled on without
    a description (live), so the user does not have to wait for a
@@ -1101,6 +1118,28 @@ html.dark .error-state { background: #450a0a; }
 		return m ? m[1] : '';
 	}
 
+	// addFieldHelp appends a small helper paragraph to a form-group
+	// so the user knows what the field means and what a typical
+	// value looks like. Accepts a string with simple <code>… </code>
+	// HTML for highlighting samples (already escaped at the call
+	// sites).
+	function addFieldHelp(group, html) {
+		if (!group || !html) return;
+		var h = document.createElement('div');
+		h.className = 'field-help';
+		h.innerHTML = html;
+		group.appendChild(h);
+	}
+
+	// setFieldPlaceholder finds the editable input/textarea inside a
+	// form-group and sets placeholder text. No-op for select / toggle
+	// groups that have no placeholder concept.
+	function setFieldPlaceholder(group, placeholder) {
+		if (!group || !placeholder) return;
+		var el = group.querySelector('input, textarea');
+		if (el) el.placeholder = placeholder;
+	}
+
 	function makeField(parent, label, type, value, onChange) {
 		if (type === 'toggle') {
 			return makeToggle(parent, label, value, onChange);
@@ -1722,20 +1761,52 @@ html.dark .error-state { background: #450a0a; }
 				item.appendChild(rm);
 
 				var row1 = makeRow(item);
-				makeField(row1, 'ID', 'text', a.id || '', function(v) { cfg.agents.list[idx].id = v; });
-				makeField(row1, 'Name', 'text', a.name || '', function(v) { cfg.agents.list[idx].name = v; });
+				var idGroup = makeField(row1, 'ID', 'text', a.id || '', function(v) { cfg.agents.list[idx].id = v; });
+				setFieldPlaceholder(idGroup, 'default');
+				addFieldHelp(idGroup,
+					'Stable lowercase identifier — used in URLs, logs, and the Subagents list. ' +
+					'Examples: <code>default</code>, <code>researcher</code>, <code>code-reviewer</code>. Avoid spaces.');
+
+				var nameGroup = makeField(row1, 'Name', 'text', a.name || '', function(v) { cfg.agents.list[idx].name = v; });
+				setFieldPlaceholder(nameGroup, 'Assistant');
+				addFieldHelp(nameGroup,
+					'Human-readable label shown in the agent picker and exports. Examples: ' +
+					'<code>Assistant</code>, <code>Code Reviewer</code>, <code>Research Agent</code>.');
 
 				var row2 = makeRow(item);
-				makeField(row2, 'Model', 'text', a.model || '', function(v) { cfg.agents.list[idx].model = v; });
-				makeField(row2, 'Max Turns', 'number', a.maxTurns || 0, function(v) { cfg.agents.list[idx].maxTurns = v; });
+				var modelGroup = makeField(row2, 'Model', 'text', a.model || '', function(v) { cfg.agents.list[idx].model = v; });
+				setFieldPlaceholder(modelGroup, 'anthropic/claude-sonnet-4-5');
+				addFieldHelp(modelGroup,
+					'<code>provider/model</code>. The provider must be configured in the Providers tab. Examples: ' +
+					'<code>anthropic/claude-sonnet-4-5</code>, ' +
+					'<code>openai/gpt-4o</code>, ' +
+					'<code>gemini/gemini-2.0-flash</code>, ' +
+					'<code>local/gemma3:4b</code>, ' +
+					'<code>ollama/qwen3:8b</code>.');
+
+				var maxTurnsGroup = makeField(row2, 'Max Turns', 'number', a.maxTurns || 0, function(v) { cfg.agents.list[idx].maxTurns = v; });
+				setFieldPlaceholder(maxTurnsGroup, '25');
+				addFieldHelp(maxTurnsGroup,
+					'How many tool-use loop iterations before the agent gives up on a single user message. ' +
+					'<code>0</code> uses the default of 25 — leave it unless you know you need more.');
 
 				var row2b = makeRow(item);
-				makeField(row2b, 'Context Window (0 = auto-detect)', 'number', a.contextWindow || 0, function(v) {
+				var ctxGroup = makeField(row2b, 'Context Window (0 = auto-detect)', 'number', a.contextWindow || 0, function(v) {
 					cfg.agents.list[idx].contextWindow = v;
 				});
-				makeField(row2b, 'Fallback Model', 'text', a.fallbackModel || '', function(v) {
+				setFieldPlaceholder(ctxGroup, '0');
+				addFieldHelp(ctxGroup,
+					'Override the auto-detected context window in tokens. ' +
+					'Leave at <code>0</code> unless your provider exposes a non-standard window or you want to clamp ' +
+					'a local model below its limit. Drives compaction and the token chip.');
+
+				var fbGroup = makeField(row2b, 'Fallback Model', 'text', a.fallbackModel || '', function(v) {
 					cfg.agents.list[idx].fallbackModel = v;
 				});
+				setFieldPlaceholder(fbGroup, 'claude-haiku-4-5');
+				addFieldHelp(fbGroup,
+					'Bare model id (no provider prefix) to retry on transient 429 / 5xx errors from the same provider. ' +
+					'Cross-provider fallback is not supported. Leave blank to disable.');
 
 				var row2bb = makeRow(item);
 				makeField(row2bb, 'Reasoning', 'select', {
@@ -1771,13 +1842,20 @@ html.dark .error-state { background: #450a0a; }
 				// gets a red border the moment subagent flips on
 				// without a description.
 				var row2c = makeRow(item);
-				makeField(row2c, 'Subagent (callable via task tool)', 'toggle', !!a.subagent, function(v) {
+				var subGroup = makeField(row2c, 'Subagent (callable via task tool)', 'toggle', !!a.subagent, function(v) {
 					cfg.agents.list[idx].subagent = v;
 					updateSubagentDescRequired(idx);
 				});
-				makeField(row2c, 'Inherit Context (subagent sees parent history)', 'toggle', !!a.inheritContext, function(v) {
+				addFieldHelp(subGroup,
+					'When on, parent agents can dispatch work to this agent via the <code>task</code> tool. ' +
+					'Requires a Subagent Description below.');
+				var inhGroup = makeField(row2c, 'Inherit Context (subagent sees parent history)', 'toggle', !!a.inheritContext, function(v) {
 					cfg.agents.list[idx].inheritContext = v;
 				});
+				addFieldHelp(inhGroup,
+					'On: subagent starts with a copy of the parent’s conversation so it can reason over what the ' +
+					'parent already knows. Off (default): subagent starts cold from just the prompt the parent gave it. ' +
+					'Use “on” for read-only explorers; “off” for self-contained tasks like running tests.');
 
 				var descGroup = makeField(item, 'Subagent Description (shown to supervisor; required when Subagent is on)', 'textarea',
 					a.description || '',
@@ -1785,6 +1863,15 @@ html.dark .error-state { background: #450a0a; }
 						cfg.agents.list[idx].description = v;
 						updateSubagentDescRequired(idx);
 					});
+				setFieldPlaceholder(descGroup,
+					'Read-only research agent. Use for: searching the codebase, summarising files, answering "where is X defined" questions. Returns a written summary, does not modify files.');
+				addFieldHelp(descGroup,
+					'Shown to the parent agent’s LLM in the <code>task</code> tool spec so it knows when to dispatch ' +
+					'to this subagent. Be specific about <em>what it does</em>, <em>what to use it for</em>, and ' +
+					'<em>what it returns</em>. Examples: ' +
+					'<code>Read-only research agent — searches files and returns a summary.</code> · ' +
+					'<code>Code reviewer — checks a diff for style/security issues, returns inline comments.</code> · ' +
+					'<code>Test runner — executes the test suite for a given path, returns pass/fail + failures.</code>');
 				// Tag the group so the save-error handler can scroll
 				// straight to the missing field, and so the live
 				// required-highlight can find it without walking the
@@ -1795,9 +1882,15 @@ html.dark .error-state { background: #450a0a; }
 
 				makeReadOnlyField(item, 'Sandbox', 'agent-sandbox-' + idx, 'not implemented yet');
 
-				makeField(item, 'System Prompt', 'textarea', a.system_prompt || '', function(v) {
+				var sysGroup = makeField(item, 'System Prompt', 'textarea', a.system_prompt || '', function(v) {
 					cfg.agents.list[idx].system_prompt = v;
 				});
+				setFieldPlaceholder(sysGroup,
+					'You are a careful research assistant. Be concise and direct. When you need to look something up, use your tools.');
+				addFieldHelp(sysGroup,
+					'Inline override of the default identity prompt. Leave blank to use Felix’s built-in identity ' +
+					'(or an <code>IDENTITY.md</code> in the agent workspace). Felix appends its standard ' +
+					'web-chat capabilities section automatically — you don’t need to repeat it here.');
 
 				makeToolsCheckboxes(item, idx, a);
 
