@@ -55,6 +55,21 @@ func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
 		`id="sidebar-footer"`,
 		`id="main-pane"`,
 		`id="messages-empty"`,
+		// Tabs + cog + Jobs surface added in PR 3.
+		`id="settings-btn"`,
+		`id="sidebar-tabs"`,
+		`id="tab-threads-btn"`,
+		`id="tab-jobs-btn"`,
+		`id="tab-threads"`,
+		`id="tab-jobs"`,
+		`id="jobs-list"`,
+		`id="jobs-list-empty"`,
+		// SVG icon symbols that the new row UI depends on.
+		`id="i-more"`,
+		`id="i-cog"`,
+		`id="i-pencil"`,
+		`id="i-pin"`,
+		`id="i-trash"`,
 	} {
 		assert.Contains(t, html, want, "expected element %q in served HTML", want)
 	}

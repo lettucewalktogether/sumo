@@ -14,10 +14,24 @@ import (
 
 // SessionInfo describes a session without loading its full contents.
 type SessionInfo struct {
-	Key          string    `json:"key"`
+	Key string `json:"key"`
+	// Name is a human-readable label for the session set via the chat
+	// UI's rename action. Empty when no friendly name has been chosen —
+	// callers fall back to Key for display in that case.
+	Name         string    `json:"name,omitempty"`
+	Pinned       bool      `json:"pinned,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
 	LastActivity time.Time `json:"lastActivity"`
 	EntryCount   int       `json:"entryCount"`
+}
+
+// sessionMeta is the on-disk shape of the per-session metadata sidecar
+// (<key>.meta.json next to <key>.jsonl). Stored as a separate file
+// rather than embedded in the JSONL header so the existing append-only
+// session writer doesn't need to be aware of the metadata model.
+type sessionMeta struct {
+	Name   string `json:"name,omitempty"`
+	Pinned bool   `json:"pinned,omitempty"`
 }
 
 // Store handles JSONL file I/O for sessions.
@@ -39,6 +53,101 @@ func (s *Store) sessionDir(agentID string) string {
 // sessionPath returns the file path for a session.
 func (s *Store) sessionPath(agentID, key string) string {
 	return filepath.Join(s.sessionDir(agentID), key+".jsonl")
+}
+
+// metaPath returns the per-session metadata sidecar path. The sidecar
+// holds the friendly name and pinned flag, both managed via SetName /
+// SetPinned. The file is optional — sessions that have never been
+// renamed or pinned simply have no sidecar.
+func (s *Store) metaPath(agentID, key string) string {
+	return filepath.Join(s.sessionDir(agentID), key+".meta.json")
+}
+
+// loadMeta reads the sidecar for a session, returning the zero value
+// for missing/invalid files. Errors other than not-found are logged
+// but not surfaced — UI display falls back to the bare key, which is
+// the right behaviour for a corrupted sidecar (don't block the chat
+// because a label is unreadable).
+func (s *Store) loadMeta(agentID, key string) sessionMeta {
+	var m sessionMeta
+	data, err := os.ReadFile(s.metaPath(agentID, key))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("session meta unreadable", "agent", agentID, "key", key, "error", err)
+		}
+		return m
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		slog.Warn("session meta malformed", "agent", agentID, "key", key, "error", err)
+		return sessionMeta{}
+	}
+	return m
+}
+
+// saveMeta writes the sidecar atomically (write to .tmp, rename) so a
+// crash mid-write can't leave a half-written JSON. If both Name and
+// Pinned are zero, deletes the sidecar — the on-disk default state is
+// "no sidecar means no overrides".
+func (s *Store) saveMeta(agentID, key string, m sessionMeta) error {
+	dir := s.sessionDir(agentID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create session dir: %w", err)
+	}
+	path := s.metaPath(agentID, key)
+	if m.Name == "" && !m.Pinned {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove empty session meta: %w", err)
+		}
+		return nil
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("marshal session meta: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("write session meta: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("commit session meta: %w", err)
+	}
+	return nil
+}
+
+// SetName sets the human-readable display name for a session. Pass an
+// empty string to clear the name (the UI will fall back to the key).
+// The session must exist; otherwise this returns an error so a stale
+// UI can't seed metadata for a key that's already been deleted.
+func (s *Store) SetName(agentID, key, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.existsLocked(agentID, key) {
+		return fmt.Errorf("session %q does not exist", key)
+	}
+	m := s.loadMeta(agentID, key)
+	m.Name = strings.TrimSpace(name)
+	return s.saveMeta(agentID, key, m)
+}
+
+// SetPinned flips the pinned flag for a session. Pinned sessions
+// surface above the time-bucketed list in the chat sidebar.
+func (s *Store) SetPinned(agentID, key string, pinned bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.existsLocked(agentID, key) {
+		return fmt.Errorf("session %q does not exist", key)
+	}
+	m := s.loadMeta(agentID, key)
+	m.Pinned = pinned
+	return s.saveMeta(agentID, key, m)
+}
+
+// existsLocked is the lock-already-held variant of Exists, for use
+// from the metadata setters which already hold s.mu.
+func (s *Store) existsLocked(agentID, key string) bool {
+	_, err := os.Stat(s.sessionPath(agentID, key))
+	return err == nil
 }
 
 // Load reads a session from its JSONL file.
@@ -157,6 +266,14 @@ func (s *Store) List(agentID string) ([]SessionInfo, error) {
 		path := filepath.Join(dir, entry.Name())
 
 		info := SessionInfo{Key: key}
+		// Layer the friendly-name + pinned sidecar over the bare key.
+		// loadMeta returns zero for sessions that have never been
+		// renamed or pinned, leaving info.Name / info.Pinned at their
+		// natural defaults.
+		if m := s.loadMeta(agentID, key); m.Name != "" || m.Pinned {
+			info.Name = m.Name
+			info.Pinned = m.Pinned
+		}
 
 		// Count lines and extract timestamps from first/last entries
 		f, err := os.Open(path)
@@ -214,7 +331,10 @@ func (s *Store) Exists(agentID, key string) bool {
 	return err == nil
 }
 
-// Rename renames a session file from oldKey to newKey.
+// Rename renames a session file from oldKey to newKey, moving the
+// metadata sidecar alongside if one exists. This is the rename-the-
+// underlying-key operation used by the CLI; in the chat UI, friendly
+// name changes are handled by SetName, which leaves the key alone.
 func (s *Store) Rename(agentID, oldKey, newKey string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -229,10 +349,23 @@ func (s *Store) Rename(agentID, oldKey, newKey string) error {
 		return fmt.Errorf("session %q already exists", newKey)
 	}
 
-	return os.Rename(oldPath, newPath)
+	if err := os.Rename(oldPath, newPath); err != nil {
+		return err
+	}
+	// Best-effort sidecar follow. A failure here doesn't undo the
+	// jsonl rename — the metadata is recoverable (it's just a label
+	// and a flag), the conversation content isn't.
+	oldMeta := s.metaPath(agentID, oldKey)
+	if _, err := os.Stat(oldMeta); err == nil {
+		newMeta := s.metaPath(agentID, newKey)
+		if err := os.Rename(oldMeta, newMeta); err != nil {
+			slog.Warn("session meta sidecar rename failed", "agent", agentID, "old", oldKey, "new", newKey, "error", err)
+		}
+	}
+	return nil
 }
 
-// Delete removes a session's JSONL file.
+// Delete removes a session's JSONL file and any metadata sidecar.
 func (s *Store) Delete(agentID, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -240,6 +373,12 @@ func (s *Store) Delete(agentID, key string) error {
 	path := s.sessionPath(agentID, key)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove session file: %w", err)
+	}
+	// Sidecar removal is best-effort: a leftover .meta.json with no
+	// matching .jsonl is harmless (List skips it because it's not a
+	// .jsonl), but cleaning up keeps the directory tidy.
+	if err := os.Remove(s.metaPath(agentID, key)); err != nil && !os.IsNotExist(err) {
+		slog.Warn("session meta sidecar remove failed", "agent", agentID, "key", key, "error", err)
 	}
 	return nil
 }

@@ -16,6 +16,13 @@ type JobScheduler interface {
 	PauseJob(name string) error
 	ResumeJob(name string) error
 	UpdateJobSchedule(name, schedule string) error
+	// RunNowJob fires the named job once, off its normal schedule.
+	// Used by the chat UI's "Run now" / "Retry" controls. Returns an
+	// error only if the job can't be found or the scheduler isn't
+	// running; the execution itself is async (the agent run is
+	// kicked off in a goroutine and reported via the configured
+	// OutputFn / log channel like a regular tick).
+	RunNowJob(name string) error
 }
 
 // JobInfo is a summary of a scheduled job, returned by ListJobs.

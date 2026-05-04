@@ -760,34 +760,11 @@ html.light #header .logo {
 	color: var(--text-muted);
 	padding: 0.7rem 0.6rem 0.25rem;
 }
-.session-row {
-	display: block;
-	width: 100%%;
-	text-align: left;
-	background: none;
-	border: none;
-	border-radius: 6px;
-	padding: 0.45rem 0.6rem;
-	color: var(--text-em);
-	font-size: 0.83rem;
-	font-family: inherit;
-	cursor: pointer;
-	overflow: hidden;
-	white-space: nowrap;
-	text-overflow: ellipsis;
-	transition: background 0.15s, color 0.15s;
-}
-.session-row:hover { background: var(--bg-input); color: var(--text); }
-.session-row.active {
-	background: var(--bg-input);
-	color: var(--accent);
-}
-.session-row .session-meta {
-	display: block;
-	font-size: 0.7rem;
-	color: var(--text-muted);
-	margin-top: 0.1rem;
-}
+/* Stale .session-row + .session-meta block from the PR 2 sidebar
+   redesign was here. The new structure (div role=button + row-line +
+   row-title + row-preview) supersedes it; the old overflow:hidden in
+   particular was clipping the absolutely-positioned row context menu.
+   Replacement rule lives further down with the rest of the row UI. */
 #session-list-empty {
 	color: var(--text-muted);
 	font-size: 0.8rem;
@@ -882,6 +859,336 @@ html.light #header .logo {
 	0%%, 100%% { opacity: 0.4; }
 	50%%       { opacity: 1.0; }
 }
+/* Settings cog in the sidebar header — sits next to the brand. */
+#settings-btn {
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 4px 6px;
+	color: var(--text);
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+#settings-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Sidebar tab toggle (Threads / Jobs). */
+#sidebar-tabs {
+	display: flex;
+	margin: 0.5rem 0.6rem 0;
+	background: var(--bg-input);
+	border-radius: 8px;
+	padding: 3px;
+	flex-shrink: 0;
+}
+.sidebar-tab {
+	flex: 1;
+	background: none;
+	border: none;
+	padding: 0.4rem 0.7rem;
+	color: var(--text-muted);
+	border-radius: 6px;
+	font-size: 0.8rem;
+	font-weight: 500;
+	font-family: inherit;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.35rem;
+}
+.sidebar-tab.active { background: var(--bg-header); color: var(--accent); }
+.tab-count {
+	background: var(--accent);
+	color: var(--btn-text);
+	border-radius: 999px;
+	padding: 0 0.45rem;
+	font-size: 0.65rem;
+	font-weight: 700;
+}
+.tab-pane {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+}
+.tab-pane[hidden] { display: none; }
+
+/* Inline SVG icon helper — every icon is 14x14 currentColor. */
+.icon {
+	width: 14px;
+	height: 14px;
+	flex-shrink: 0;
+	display: inline-block;
+	vertical-align: middle;
+}
+
+/* Replace the old session-row buttons with a div role=button so the
+   row can legally contain a flex line + a nested ⋮ button. The CSS
+   targets .session-row everywhere — same hooks the JS already uses. */
+.session-row {
+	position: relative;
+	display: block;
+	border-radius: 6px;
+	padding: 0.5rem 0.6rem 0.55rem;
+	color: var(--text-em);
+	font-size: 0.83rem;
+	cursor: pointer;
+	margin-bottom: 1px;
+}
+.session-row:hover { background: var(--bg-input); color: var(--text); }
+.session-row.active { background: var(--bg-input); color: var(--accent); }
+.session-row .row-line {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	min-width: 0;
+}
+.session-row .row-title {
+	flex: 1;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.session-row .row-preview {
+	display: block;
+	font-size: 0.7rem;
+	color: var(--text-muted);
+	margin-top: 0.15rem;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+/* ⋮ button sits inline at the end of the title line — hover-only. */
+.session-row .row-more {
+	flex-shrink: 0;
+	background: transparent;
+	border: none;
+	color: inherit;
+	cursor: pointer;
+	width: 22px;
+	height: 22px;
+	border-radius: 4px;
+	padding: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	opacity: 0;
+	transition: opacity 0.1s ease;
+}
+.session-row:hover .row-more,
+.session-row.show-menu .row-more { opacity: 1; }
+.session-row .row-more:hover { background: var(--bg-header); color: var(--accent); }
+
+/* Per-row context menu popover (Rename / Pin / Delete). The slightly
+   brighter background + accent2 border lifts the menu visually off
+   the sidebar's bg-header, which would otherwise blend (both dark
+   navy). The drop shadow gives a clear "this floats above" cue. */
+.row-menu {
+	position: absolute;
+	right: 0.4rem;
+	top: 100%%;
+	transform: translateY(-2px);
+	background: var(--bg-msg-user);
+	border: 1px solid var(--accent2);
+	border-radius: 8px;
+	box-shadow: 0 8px 24px rgba(0,0,0,0.55);
+	padding: 0.3rem;
+	min-width: 168px;
+	z-index: 10;
+	font-size: 0.82rem;
+}
+.row-menu button {
+	display: flex;
+	align-items: center;
+	gap: 0.55rem;
+	width: 100%%;
+	background: none;
+	border: none;
+	padding: 0.4rem 0.55rem;
+	color: var(--text);
+	border-radius: 4px;
+	cursor: pointer;
+	text-align: left;
+	font-family: inherit;
+	font-size: 0.82rem;
+}
+.row-menu button:hover { background: var(--bg-input); }
+.row-menu .menu-sep { height: 1px; background: var(--border); margin: 0.2rem 0.1rem; }
+.row-menu .danger { color: var(--error); }
+.row-menu .danger:hover { background: rgba(231,76,60,0.12); }
+
+/* Inline rename: title cell becomes an editable input. */
+.session-row.editing .row-title { display: none; }
+.session-row.editing .row-rename-input {
+	flex: 1;
+	min-width: 0;
+	background: var(--bg);
+	border: 1px solid var(--accent);
+	border-radius: 4px;
+	color: var(--text);
+	font-size: 0.83rem;
+	padding: 0.2rem 0.4rem;
+	font-family: inherit;
+}
+
+/* Pinned badge on a session row. */
+.session-row .row-pin-mark {
+	flex-shrink: 0;
+	color: var(--accent2);
+	display: inline-flex;
+	align-items: center;
+}
+.session-row .row-pin-mark svg { width: 11px; height: 11px; }
+
+/* Job rows (Step 3 fills these in; basic styling here so the
+   placeholder list looks tidy). */
+#jobs-list, #session-list { flex: 1; overflow-y: auto; padding: 0 0.4rem 0.6rem; }
+#jobs-list-empty, #session-list-empty { color: var(--text-muted); font-size: 0.8rem; padding: 0.7rem 0.6rem; font-style: italic; }
+.job-row {
+	position: relative;
+	background: var(--bg-input);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 0.55rem 0.6rem;
+	margin: 0 0.2rem 0.4rem;
+	font-size: 0.82rem;
+	color: var(--text-em);
+	cursor: pointer;
+}
+.job-row:hover { border-color: var(--accent); }
+.job-row.active { border-color: var(--accent); }
+.job-row .job-title { display: block; color: var(--text); padding-right: 6.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job-row .job-state {
+	display: inline-flex; align-items: center; gap: 0.3rem;
+	font-size: 0.7rem; color: var(--accent);
+	margin-top: 0.25rem;
+}
+.job-row .job-state::before {
+	content: ""; width: 6px; height: 6px; border-radius: 50%%;
+	background: var(--accent);
+	animation: jobpulse 1.4s ease-in-out infinite;
+}
+.job-row .job-state.paused { color: var(--text-muted); }
+.job-row .job-state.paused::before { background: var(--text-muted); animation: none; }
+.job-row .job-state.error { color: var(--error); }
+.job-row .job-state.error::before { background: var(--error); animation: none; }
+.job-row.error { border-color: rgba(231,76,60,0.45); }
+.job-row .job-meta { color: var(--text-muted); font-size: 0.7rem; margin-top: 0.15rem; }
+@keyframes jobpulse { 0%%,100%%{opacity:0.4} 50%%{opacity:1} }
+.job-actions {
+	position: absolute;
+	right: 0.4rem; top: 0.4rem;
+	display: none;
+	gap: 2px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 2px;
+}
+.job-row:hover .job-actions { display: inline-flex; }
+.job-actions button {
+	background: none; border: none;
+	color: var(--text-em); cursor: pointer;
+	width: 26px; height: 26px;
+	border-radius: 4px; padding: 0;
+	display: inline-flex; align-items: center; justify-content: center;
+}
+.job-actions button:hover { background: var(--bg-input); color: var(--accent); }
+
+/* Bubble bidi: dir=auto is added on the elements (set in JS), and
+   unicode-bidi:plaintext makes the browser resolve direction per
+   paragraph from the first strong character. RTL Arabic / Hebrew
+   lines flow correctly without flipping LTR English. */
+.msg.user, .msg.assistant .content {
+	unicode-bidi: plaintext;
+}
+
+/* Job detail card — replaces the messages/input bar in the main
+   pane when the user clicks a job in the Jobs sidebar tab. Keeps
+   the same outer layout so toggling back is just a display swap. */
+#job-detail {
+	flex: 1;
+	overflow-y: auto;
+	padding: 1.25rem 1.75rem 2rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.85rem;
+}
+.job-detail-head {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	border-bottom: 1px solid var(--border);
+	padding-bottom: 0.6rem;
+	margin-bottom: 0.4rem;
+}
+.job-detail-back {
+	background: var(--bg-input);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 0.35rem 0.7rem;
+	color: var(--text);
+	cursor: pointer;
+	font-size: 0.8rem;
+	font-family: inherit;
+}
+.job-detail-back:hover { border-color: var(--accent); color: var(--accent); }
+.job-detail-title { font-size: 1.1rem; font-weight: 600; color: var(--text-strong); }
+.job-detail-status { padding: 0.2rem 0; }
+.job-detail-status .job-state { font-size: 0.85rem; }
+.job-detail-field {
+	display: grid;
+	grid-template-columns: 7em 1fr;
+	gap: 0.6rem 1rem;
+	padding: 0.4rem 0;
+	border-bottom: 1px dashed var(--border);
+}
+.job-detail-label {
+	font-size: 0.75rem;
+	color: var(--text-muted);
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+}
+.job-detail-value {
+	color: var(--text);
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-family: "SF Mono", "Fira Code", monospace;
+	font-size: 0.85rem;
+}
+.job-detail-actions {
+	display: flex;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+	margin-top: 0.6rem;
+}
+.job-detail-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.45rem;
+	padding: 0.5rem 0.9rem;
+	background: var(--bg-input);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	color: var(--text);
+	cursor: pointer;
+	font-size: 0.85rem;
+	font-family: inherit;
+}
+.job-detail-btn:hover { border-color: var(--accent); color: var(--accent); }
+.job-detail-btn.danger:hover { border-color: var(--error); color: var(--error); }
+.job-detail-hint {
+	margin-top: 1.2rem;
+	color: var(--text-muted);
+	font-size: 0.78rem;
+	border-left: 2px solid var(--border);
+	padding-left: 0.6rem;
+	max-width: 60ch;
+}
+
 /* Narrow viewport: collapse the sidebar by default; hamburger
    toggle in the header reveals it as an overlay rather than
    shrinking the main pane. */
@@ -900,14 +1207,70 @@ html.light #header .logo {
 </style>
 </head>
 <body>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+<defs>
+	<symbol id="i-more" viewBox="0 0 24 24" fill="currentColor">
+		<circle cx="12" cy="5" r="1.7"/>
+		<circle cx="12" cy="12" r="1.7"/>
+		<circle cx="12" cy="19" r="1.7"/>
+	</symbol>
+	<symbol id="i-cog" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+		<circle cx="12" cy="12" r="3"/>
+		<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+	</symbol>
+	<symbol id="i-pencil" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+		<path d="M12 20h9"/>
+		<path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4z"/>
+	</symbol>
+	<symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+		<line x1="12" y1="17" x2="12" y2="22"/>
+		<path d="M5 17h14l-2-7V4H7v6z"/>
+	</symbol>
+	<symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+		<polyline points="3 6 5 6 21 6"/>
+		<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+		<path d="M10 11v6M14 11v6"/>
+		<path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>
+	</symbol>
+	<symbol id="i-pause" viewBox="0 0 24 24" fill="currentColor">
+		<rect x="7" y="5" width="3.5" height="14" rx="0.6"/>
+		<rect x="13.5" y="5" width="3.5" height="14" rx="0.6"/>
+	</symbol>
+	<symbol id="i-play" viewBox="0 0 24 24" fill="currentColor">
+		<path d="M7.5 4.5 L19 12 L7.5 19.5 Z"/>
+	</symbol>
+	<symbol id="i-rerun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+		<polyline points="20 4 20 9 15 9"/>
+		<path d="M20 9a8 8 0 1 0-2 7"/>
+	</symbol>
+	<symbol id="i-log" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+		<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+		<polyline points="14 2 14 8 20 8"/>
+		<line x1="8" y1="13" x2="16" y2="13"/>
+		<line x1="8" y1="17" x2="16" y2="17"/>
+	</symbol>
+</defs>
+</svg>
 <div id="layout">
 <aside id="sidebar">
 	<div id="sidebar-header">
 		<span id="sidebar-brand">Felix</span>
+		<button id="settings-btn" type="button" title="Open settings" aria-label="Open settings"><svg class="icon"><use href="#i-cog"/></svg></button>
 	</div>
-	<button id="new-chat-btn" type="button" title="Start a new conversation"><span class="plus">+</span> New chat</button>
-	<div id="session-list" aria-label="Conversations">
-		<div id="session-list-empty">No conversations yet.</div>
+	<div id="sidebar-tabs" role="tablist">
+		<button id="tab-threads-btn" class="sidebar-tab active" role="tab" aria-selected="true">Threads</button>
+		<button id="tab-jobs-btn" class="sidebar-tab" role="tab" aria-selected="false">Jobs <span id="jobs-count" class="tab-count" hidden>0</span></button>
+	</div>
+	<div id="tab-threads" class="tab-pane active" role="tabpanel">
+		<button id="new-chat-btn" type="button" title="Start a new conversation"><span class="plus">+</span> New chat</button>
+		<div id="session-list" aria-label="Conversations">
+			<div id="session-list-empty">No conversations yet.</div>
+		</div>
+	</div>
+	<div id="tab-jobs" class="tab-pane" role="tabpanel" hidden>
+		<div id="jobs-list" aria-label="Background jobs">
+			<div id="jobs-list-empty">No background jobs.</div>
+		</div>
 	</div>
 	<div id="sidebar-footer">
 		<span id="token-chip" title="Tokens used / context window">—</span>
@@ -973,12 +1336,27 @@ html.light #header .logo {
 	var sessionListEmptyEl = document.getElementById('session-list-empty');
 	var sidebarEl = document.getElementById('sidebar');
 	var sidebarToggleBtn = document.getElementById('sidebar-toggle');
+	var settingsBtn = document.getElementById('settings-btn');
+	var tabThreadsBtn = document.getElementById('tab-threads-btn');
+	var tabJobsBtn = document.getElementById('tab-jobs-btn');
+	var tabThreadsPane = document.getElementById('tab-threads');
+	var tabJobsPane = document.getElementById('tab-jobs');
+	var jobsListEl = document.getElementById('jobs-list');
+	var jobsListEmptyEl = document.getElementById('jobs-list-empty');
+	var jobsCountEl = document.getElementById('jobs-count');
 
 	// Active conversation tracking — the session-select dropdown went
 	// away with the sidebar redesign, so we keep the active session key
 	// here in JS (kept in lock-step with what the server thinks via
 	// session.switch) and read it from the rendered .active row.
 	var activeSessionKey = '';
+
+	// Main pane mode. 'chat' → conversation messages + input bar (the
+	// default). 'job'  → job detail view (name, schedule, prompt, state,
+	// action buttons) anchored via #job-detail injected into #main-pane.
+	// Switching back to 'chat' restores the messages/trace/input layout.
+	var mainMode = 'chat';
+	var activeJobName = '';
 	// Last-seen session list, kept so re-renders (after a window switch
 	// or new-chat creation) can repaint without a round-trip.
 	var sessionsCache = [];
@@ -1385,8 +1763,11 @@ html.light #header .logo {
 	});
 
 	function switchToSession(key) {
-		if (!key || key === activeSessionKey) return;
+		if (!key || (key === activeSessionKey && mainMode === 'chat')) return;
 		if (!ws || ws.readyState !== WebSocket.OPEN) return;
+		// If we were viewing a job's detail in the main pane, jump
+		// back to the conversation view first.
+		if (mainMode === 'job') restoreChatView();
 		activeSessionKey = key;
 		// Repaint sidebar so the new active row highlights immediately,
 		// before the server confirms.
@@ -1439,6 +1820,256 @@ html.light #header .logo {
 		}
 	});
 
+	// Settings cog → /settings in the same tab. Same-tab navigation
+	// keeps the user's mental model linear (back button returns them
+	// to the chat) and avoids tab proliferation.
+	if (settingsBtn) {
+		settingsBtn.addEventListener('click', function() {
+			window.location.assign('/settings');
+		});
+	}
+
+	// Sidebar tabs (Threads / Jobs). Switching to Jobs lazily fires
+	// jobs.list — there's no point polling when the tab isn't open.
+	var activeTab = 'threads';
+	function setActiveTab(name) {
+		if (activeTab === name) return;
+		activeTab = name;
+		var onThreads = name === 'threads';
+		tabThreadsBtn.classList.toggle('active', onThreads);
+		tabThreadsBtn.setAttribute('aria-selected', onThreads ? 'true' : 'false');
+		tabJobsBtn.classList.toggle('active', !onThreads);
+		tabJobsBtn.setAttribute('aria-selected', onThreads ? 'false' : 'true');
+		tabThreadsPane.hidden = !onThreads;
+		tabJobsPane.hidden = onThreads;
+		if (!onThreads) loadJobs();
+	}
+	tabThreadsBtn.addEventListener('click', function(){ setActiveTab('threads'); });
+	tabJobsBtn.addEventListener('click', function(){ setActiveTab('jobs'); });
+
+	// Jobs tab — basic list rendering. Action cluster + click-to-
+	// inspect-in-main-pane comes in the next commit.
+	var jobsCache = [];
+	function loadJobs() {
+		if (!ws || ws.readyState !== WebSocket.OPEN) return;
+		ws.send(JSON.stringify({
+			jsonrpc: '2.0',
+			method: 'jobs.list',
+			params: {},
+			id: 'jobs-list'
+		}));
+	}
+	function renderJobsList(jobs) {
+		jobsCache = jobs || [];
+		// Clear out previous job rows; keep the empty placeholder.
+		while (jobsListEl.firstChild &&
+				jobsListEl.firstChild.id !== 'jobs-list-empty') {
+			jobsListEl.removeChild(jobsListEl.firstChild);
+		}
+		if (jobsCountEl) {
+			if (jobs.length === 0) {
+				jobsCountEl.hidden = true;
+			} else {
+				jobsCountEl.hidden = false;
+				jobsCountEl.textContent = String(jobs.length);
+			}
+		}
+		if (!jobs || jobs.length === 0) {
+			jobsListEmptyEl.style.display = '';
+			return;
+		}
+		jobsListEmptyEl.style.display = 'none';
+
+		var fragment = document.createDocumentFragment();
+		for (var i = 0; i < jobs.length; i++) {
+			fragment.appendChild(buildJobRow(jobs[i]));
+		}
+		jobsListEl.insertBefore(fragment, jobsListEmptyEl);
+	}
+
+	// buildJobRow renders one job — title + state + schedule meta,
+	// with a state-aware hover action cluster on the right (pause /
+	// resume / run-now / view detail). Clicking the row body shows
+	// the job detail in the main pane.
+	function buildJobRow(j) {
+		var row = document.createElement('div');
+		row.className = 'job-row';
+		row.setAttribute('role', 'button');
+		row.setAttribute('tabindex', '0');
+		row.dataset.jobName = j.name;
+		if (j.paused) row.classList.add('paused');
+		if (mainMode === 'job' && activeJobName === j.name) row.classList.add('active');
+
+		var title = document.createElement('span');
+		title.className = 'job-title';
+		title.textContent = j.name;
+		row.appendChild(title);
+
+		var state = document.createElement('span');
+		state.className = 'job-state' + (j.paused ? ' paused' : '');
+		state.textContent = j.paused ? 'paused' : 'running';
+		row.appendChild(state);
+
+		var meta = document.createElement('span');
+		meta.className = 'job-meta';
+		meta.textContent = j.schedule || '';
+		row.appendChild(meta);
+
+		// State-aware action cluster, hover-revealed via CSS.
+		var actions = document.createElement('div');
+		actions.className = 'job-actions';
+		function mkBtn(label, iconId, onClick) {
+			var b = document.createElement('button');
+			b.type = 'button';
+			b.title = label;
+			b.setAttribute('aria-label', label);
+			b.innerHTML = '<svg class="icon"><use href="#' + iconId + '"/></svg>';
+			b.addEventListener('click', function(e) {
+				e.stopPropagation();
+				onClick();
+			});
+			return b;
+		}
+		if (j.paused) {
+			actions.appendChild(mkBtn('Resume', 'i-play', function(){ jobsAction('jobs.resume', j.name); }));
+			actions.appendChild(mkBtn('Run now', 'i-rerun', function(){ jobsAction('jobs.runNow', j.name); }));
+		} else {
+			actions.appendChild(mkBtn('Pause', 'i-pause', function(){ jobsAction('jobs.pause', j.name); }));
+			actions.appendChild(mkBtn('Run now', 'i-rerun', function(){ jobsAction('jobs.runNow', j.name); }));
+		}
+		actions.appendChild(mkBtn('View detail', 'i-log', function(){ showJobDetail(j); }));
+		row.appendChild(actions);
+
+		row.addEventListener('click', function() { showJobDetail(j); });
+		row.addEventListener('keydown', function(e) {
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				showJobDetail(j);
+			}
+		});
+		return row;
+	}
+
+	// jobsAction fires a one-shot job RPC and refreshes the list so
+	// the row's state reflects the new server-side reality. Errors
+	// surface through addError via the WS error path.
+	function jobsAction(method, name) {
+		if (!ws || ws.readyState !== WebSocket.OPEN) return;
+		ws.send(JSON.stringify({
+			jsonrpc: '2.0',
+			method: method,
+			params: { name: name },
+			id: 'jobs-action-' + name
+		}));
+		// Give the server a moment to flip the state, then re-list.
+		setTimeout(loadJobs, 150);
+	}
+
+	// showJobDetail switches the main pane into 'job' mode and paints
+	// a detail card for the selected job. Hides the conversation view
+	// (messages, trace, input bar) without destroying their state, so
+	// switching back is instant.
+	function showJobDetail(j) {
+		mainMode = 'job';
+		activeJobName = j.name;
+		// Hide the chat surfaces.
+		messagesEl.style.display = 'none';
+		var inputAreaWrap = document.getElementById('input-area-wrap');
+		if (inputAreaWrap) inputAreaWrap.style.display = 'none';
+		var tracePanel = document.getElementById('trace-panel');
+		if (tracePanel) tracePanel.dataset.savedDisplay = tracePanel.style.display || '';
+		if (tracePanel) tracePanel.style.display = 'none';
+
+		// Find or create the job-detail panel.
+		var pane = document.getElementById('job-detail');
+		if (!pane) {
+			pane = document.createElement('div');
+			pane.id = 'job-detail';
+			document.getElementById('main-pane').appendChild(pane);
+		}
+		pane.style.display = '';
+
+		var statusLabel = j.paused ? 'Paused' : 'Running';
+		var primaryActionLabel = j.paused ? 'Resume' : 'Pause';
+		var primaryActionMethod = j.paused ? 'jobs.resume' : 'jobs.pause';
+		var primaryActionIcon = j.paused ? 'i-play' : 'i-pause';
+
+		pane.innerHTML = '';
+		var head = document.createElement('div');
+		head.className = 'job-detail-head';
+		head.innerHTML =
+			'<button id="job-detail-back" class="job-detail-back" title="Back to chat" aria-label="Back to chat">&larr; Back to chat</button>' +
+			'<h2 class="job-detail-title"></h2>';
+		head.querySelector('.job-detail-title').textContent = j.name;
+		pane.appendChild(head);
+
+		var statusRow = document.createElement('div');
+		statusRow.className = 'job-detail-status';
+		statusRow.innerHTML = '<span class="job-state' + (j.paused ? ' paused' : '') + '">' + statusLabel + '</span>';
+		pane.appendChild(statusRow);
+
+		function addField(label, value) {
+			var f = document.createElement('div');
+			f.className = 'job-detail-field';
+			var l = document.createElement('div'); l.className = 'job-detail-label'; l.textContent = label;
+			var v = document.createElement('div'); v.className = 'job-detail-value'; v.textContent = value || '—';
+			f.appendChild(l); f.appendChild(v); pane.appendChild(f);
+		}
+		addField('Schedule', j.schedule);
+		addField('Prompt', j.prompt);
+
+		var actions = document.createElement('div');
+		actions.className = 'job-detail-actions';
+		function bigBtn(label, iconId, kind, onClick) {
+			var b = document.createElement('button');
+			b.type = 'button';
+			b.className = 'job-detail-btn' + (kind ? ' ' + kind : '');
+			b.innerHTML = '<svg class="icon"><use href="#' + iconId + '"/></svg> ' + label;
+			b.addEventListener('click', onClick);
+			return b;
+		}
+		actions.appendChild(bigBtn(primaryActionLabel, primaryActionIcon, '', function(){
+			jobsAction(primaryActionMethod, j.name);
+		}));
+		actions.appendChild(bigBtn('Run now', 'i-rerun', '', function(){
+			jobsAction('jobs.runNow', j.name);
+		}));
+		actions.appendChild(bigBtn('Remove', 'i-trash', 'danger', function(){
+			if (!confirm('Remove job "' + j.name + '"? It stops running and is deleted.')) return;
+			jobsAction('jobs.remove', j.name);
+			// After removal, return to chat — the job no longer exists.
+			restoreChatView();
+		}));
+		pane.appendChild(actions);
+
+		var hint = document.createElement('div');
+		hint.className = 'job-detail-hint';
+		hint.textContent = 'Run history is logged via the gateway slog stream — open the system tray Logs menu to inspect specific runs.';
+		pane.appendChild(hint);
+
+		// Wire the back button.
+		document.getElementById('job-detail-back').addEventListener('click', restoreChatView);
+
+		// Reflect the highlight on the sidebar row.
+		renderJobsList(jobsCache);
+	}
+
+	function restoreChatView() {
+		if (mainMode !== 'job') return;
+		mainMode = 'chat';
+		activeJobName = '';
+		var pane = document.getElementById('job-detail');
+		if (pane) pane.style.display = 'none';
+		messagesEl.style.display = '';
+		var inputAreaWrap = document.getElementById('input-area-wrap');
+		if (inputAreaWrap) inputAreaWrap.style.display = '';
+		var tracePanel = document.getElementById('trace-panel');
+		if (tracePanel && tracePanel.dataset.savedDisplay !== undefined) {
+			tracePanel.style.display = tracePanel.dataset.savedDisplay;
+		}
+		renderJobsList(jobsCache);
+	}
+
 	function loadSessions() {
 		if (!ws || ws.readyState !== WebSocket.OPEN) return;
 		ws.send(JSON.stringify({
@@ -1472,63 +2103,268 @@ html.light #header .logo {
 	// empty-state placeholder. Active session is determined by the
 	// 'active' flag from the server, falling back to activeSessionKey
 	// when this client made an unconfirmed switch.
+	// Returns the human-readable label for a session — friendly name
+	// when one has been set via session.rename, otherwise the bare key.
+	function sessionDisplayName(s) {
+		var n = (s && s.name) ? String(s.name).trim() : '';
+		return n || s.key;
+	}
+
+	// buildSessionRow renders one session as a div role=button with a
+	// flex title line + ⋮ trigger and an optional preview line below.
+	// The ⋮ opens the row context menu (Rename / Pin / Delete).
+	function buildSessionRow(s) {
+		var row = document.createElement('div');
+		row.className = 'session-row';
+		row.setAttribute('role', 'button');
+		row.setAttribute('tabindex', '0');
+		if (s.key === activeSessionKey) row.classList.add('active');
+		row.dataset.sessionKey = s.key;
+		row.title = sessionDisplayName(s);
+
+		var line = document.createElement('div');
+		line.className = 'row-line';
+
+		if (s.pinned) {
+			var pinMark = document.createElement('span');
+			pinMark.className = 'row-pin-mark';
+			pinMark.title = 'Pinned';
+			pinMark.innerHTML = '<svg class="icon"><use href="#i-pin"/></svg>';
+			line.appendChild(pinMark);
+		}
+
+		var titleEl = document.createElement('span');
+		titleEl.className = 'row-title';
+		titleEl.textContent = sessionDisplayName(s);
+		line.appendChild(titleEl);
+
+		var more = document.createElement('button');
+		more.type = 'button';
+		more.className = 'row-more';
+		more.title = 'More';
+		more.setAttribute('aria-label', 'More options');
+		more.innerHTML = '<svg class="icon"><use href="#i-more"/></svg>';
+		more.addEventListener('click', function(e) {
+			e.stopPropagation();
+			openRowMenu(row, s);
+		});
+		line.appendChild(more);
+
+		row.appendChild(line);
+
+		var preview = (s.entryCount || 0) + ' message' + (s.entryCount === 1 ? '' : 's');
+		var previewEl = document.createElement('span');
+		previewEl.className = 'row-preview';
+		previewEl.textContent = preview;
+		row.appendChild(previewEl);
+
+		row.addEventListener('click', function() {
+			if (row.classList.contains('editing')) return;
+			switchToSession(s.key);
+		});
+		row.addEventListener('keydown', function(e) {
+			if (row.classList.contains('editing')) return;
+			if (e.key === 'Enter' || e.key === ' ') {
+				e.preventDefault();
+				switchToSession(s.key);
+			}
+		});
+		return row;
+	}
+
+	// openRowMenu toggles the popover on the row, closing any other
+	// open menus first. Document-level click handler closes when the
+	// click lands outside.
+	var openMenuRow = null;
+	function closeRowMenu() {
+		if (!openMenuRow) return;
+		var existing = openMenuRow.querySelector('.row-menu');
+		if (existing) existing.remove();
+		openMenuRow.classList.remove('show-menu');
+		openMenuRow = null;
+	}
+	function openRowMenu(row, s) {
+		if (openMenuRow === row) { closeRowMenu(); return; }
+		closeRowMenu();
+		var menu = document.createElement('div');
+		menu.className = 'row-menu';
+		menu.addEventListener('click', function(e){ e.stopPropagation(); });
+
+		function mkItem(label, iconId, danger, onClick) {
+			var b = document.createElement('button');
+			b.type = 'button';
+			if (danger) b.className = 'danger';
+			b.innerHTML = '<svg class="icon"><use href="#' + iconId + '"/></svg> ' + label;
+			b.addEventListener('click', function() {
+				closeRowMenu();
+				onClick();
+			});
+			return b;
+		}
+		menu.appendChild(mkItem('Rename', 'i-pencil', false, function(){ beginRenameRow(row, s); }));
+		menu.appendChild(mkItem(s.pinned ? 'Unpin' : 'Pin', 'i-pin', false, function(){ setPinned(s.key, !s.pinned); }));
+		var sep = document.createElement('div');
+		sep.className = 'menu-sep';
+		menu.appendChild(sep);
+		menu.appendChild(mkItem('Delete', 'i-trash', true, function(){ deleteSessionRow(s.key); }));
+		row.appendChild(menu);
+		row.classList.add('show-menu');
+		openMenuRow = row;
+	}
+	document.addEventListener('click', function(e){
+		if (!openMenuRow) return;
+		if (openMenuRow.contains(e.target)) return;
+		closeRowMenu();
+	});
+
+	// Inline rename: swap the title span for an <input>, commit on
+	// Enter via session.rename, cancel on Esc or blur.
+	function beginRenameRow(row, s) {
+		if (row.classList.contains('editing')) return;
+		row.classList.add('editing');
+		var line = row.querySelector('.row-line');
+		var input = document.createElement('input');
+		input.type = 'text';
+		input.className = 'row-rename-input';
+		input.value = sessionDisplayName(s);
+		// Insert the input before the ⋮ button so the layout stays.
+		var more = row.querySelector('.row-more');
+		line.insertBefore(input, more);
+		input.focus();
+		input.select();
+		var cleaned = false;
+		function cleanup() {
+			if (cleaned) return;
+			cleaned = true;
+			row.classList.remove('editing');
+			input.remove();
+		}
+		function commit() {
+			var v = input.value.trim();
+			cleanup();
+			renameSession(s.key, v);
+		}
+		input.addEventListener('keydown', function(e){
+			if (e.key === 'Enter') { e.preventDefault(); commit(); }
+			else if (e.key === 'Escape') { e.preventDefault(); cleanup(); }
+		});
+		input.addEventListener('blur', function(){
+			// Blur during normal interaction commits, like ChatGPT/
+			// Claude — clicking elsewhere accepts the edit rather
+			// than discarding it.
+			if (!cleaned) commit();
+		});
+		input.addEventListener('click', function(e){ e.stopPropagation(); });
+	}
+
+	function renameSession(key, name) {
+		if (!ws || ws.readyState !== WebSocket.OPEN) return;
+		// Optimistic update: patch the cache and repaint immediately.
+		for (var i = 0; i < sessionsCache.length; i++) {
+			if (sessionsCache[i].key === key) {
+				sessionsCache[i].name = name;
+				break;
+			}
+		}
+		renderSessionList(sessionsCache);
+		ws.send(JSON.stringify({
+			jsonrpc: '2.0',
+			method: 'session.rename',
+			params: { agentId: agentSelect.value, sessionKey: key, name: name },
+			id: 'session-rename-' + key
+		}));
+	}
+
+	function setPinned(key, pinned) {
+		if (!ws || ws.readyState !== WebSocket.OPEN) return;
+		// Optimistic update — same pattern as rename.
+		for (var i = 0; i < sessionsCache.length; i++) {
+			if (sessionsCache[i].key === key) {
+				sessionsCache[i].pinned = pinned;
+				break;
+			}
+		}
+		renderSessionList(sessionsCache);
+		ws.send(JSON.stringify({
+			jsonrpc: '2.0',
+			method: 'session.setPinned',
+			params: { agentId: agentSelect.value, sessionKey: key, pinned: pinned },
+			id: 'session-pin-' + key
+		}));
+	}
+
+	function deleteSessionRow(key) {
+		if (!ws || ws.readyState !== WebSocket.OPEN) return;
+		var label = key;
+		for (var i = 0; i < sessionsCache.length; i++) {
+			if (sessionsCache[i].key === key) { label = sessionDisplayName(sessionsCache[i]); break; }
+		}
+		if (!confirm('Delete "' + label + '"? This removes the conversation history permanently.')) return;
+		// session.clear with the existing handler is destructive in the
+		// sense that it wipes history — but the sessions list still
+		// shows the (now empty) session. For full removal we'd need a
+		// dedicated session.delete RPC; until then, clear the history
+		// and reload the list so the session falls back to a fresh state.
+		// TODO: add session.delete on the server when this UI lands.
+		ws.send(JSON.stringify({
+			jsonrpc: '2.0',
+			method: 'session.clear',
+			params: { agentId: agentSelect.value, sessionKey: key },
+			id: 'clear'
+		}));
+		clearMessagesPane();
+		resetTokenChip();
+		setTimeout(loadSessions, 50);
+	}
+
 	function renderSessionList(sessions) {
 		sessionsCache = sessions || [];
-		// Clear out previous rows but keep the empty placeholder element
-		// so we can show/hide rather than re-create it.
 		while (sessionListEl.firstChild &&
 				sessionListEl.firstChild.id !== 'session-list-empty') {
 			sessionListEl.removeChild(sessionListEl.firstChild);
 		}
-		if (sessions.length === 0) {
+		if (!sessions || sessions.length === 0) {
 			sessionListEmptyEl.style.display = '';
 			return;
 		}
 		sessionListEmptyEl.style.display = 'none';
 
-		// Latest first, then bucket.
-		var sorted = sessions.slice().sort(function(a, b) {
-			return Number(b.lastActivity || 0) - Number(a.lastActivity || 0);
-		});
-		var grouped = {};
-		for (var i = 0; i < sorted.length; i++) {
-			var b = bucketForSession(sorted[i]);
-			(grouped[b] = grouped[b] || []).push(sorted[i]);
+		// Pinned section first, then time buckets in recency order.
+		var pinned = [];
+		var unpinned = [];
+		for (var i = 0; i < sessions.length; i++) {
+			(sessions[i].pinned ? pinned : unpinned).push(sessions[i]);
 		}
+		pinned.sort(function(a,b){ return Number(b.lastActivity||0) - Number(a.lastActivity||0); });
+		unpinned.sort(function(a,b){ return Number(b.lastActivity||0) - Number(a.lastActivity||0); });
 
 		var fragment = document.createDocumentFragment();
+
+		if (pinned.length > 0) {
+			var hdr = document.createElement('div');
+			hdr.className = 'session-group-label';
+			hdr.textContent = 'Pinned';
+			fragment.appendChild(hdr);
+			for (var p = 0; p < pinned.length; p++) {
+				fragment.appendChild(buildSessionRow(pinned[p]));
+			}
+		}
+
+		var grouped = {};
+		for (var u = 0; u < unpinned.length; u++) {
+			var b = bucketForSession(unpinned[u]);
+			(grouped[b] = grouped[b] || []).push(unpinned[u]);
+		}
 		for (var g = 0; g < BUCKET_ORDER.length; g++) {
 			var label = BUCKET_ORDER[g];
 			var group = grouped[label];
 			if (!group || group.length === 0) continue;
-			var hdr = document.createElement('div');
-			hdr.className = 'session-group-label';
-			hdr.textContent = label;
-			fragment.appendChild(hdr);
+			var hdr2 = document.createElement('div');
+			hdr2.className = 'session-group-label';
+			hdr2.textContent = label;
+			fragment.appendChild(hdr2);
 			for (var j = 0; j < group.length; j++) {
-				(function(s) {
-					var row = document.createElement('button');
-					row.type = 'button';
-					row.className = 'session-row';
-					// activeSessionKey is the single source of truth at
-					// render time. The server's s.active flag is used
-					// only to seed activeSessionKey in the session.list
-					// response handler. OR-ing here would let the
-					// cached server flag fight the optimistic local
-					// switch and leave two rows highlighted at once.
-					if (s.key === activeSessionKey) row.classList.add('active');
-					row.title = s.key;
-					row.textContent = s.key;
-					var meta = document.createElement('span');
-					meta.className = 'session-meta';
-					meta.textContent = (s.entryCount || 0) + ' message' +
-						(s.entryCount === 1 ? '' : 's');
-					row.appendChild(meta);
-					row.addEventListener('click', function() {
-						switchToSession(s.key);
-					});
-					fragment.appendChild(row);
-				})(group[j]);
+				fragment.appendChild(buildSessionRow(group[j]));
 			}
 		}
 		sessionListEl.insertBefore(fragment, sessionListEmptyEl);
@@ -1844,6 +2680,24 @@ html.light #header .logo {
 					return;
 				}
 
+				// jobs.list response — paint the Jobs tab. Only fired
+				// when the user actually opens the Jobs tab (lazy).
+				if (resp.id === 'jobs-list') {
+					var jobs = (resp.result && resp.result.jobs) || [];
+					renderJobsList(jobs);
+					return;
+				}
+
+				// session.rename / setPinned acks: the optimistic
+				// repaint in the UI already handled the visual update;
+				// the server confirmation is logged but otherwise
+				// silent. If it errored, addError surfaces it.
+				if (typeof resp.id === 'string' && (
+					resp.id.indexOf('session-rename-') === 0 ||
+					resp.id.indexOf('session-pin-') === 0)) {
+					return;
+				}
+
 				// Handle history response
 				if (resp.id === 'history') {
 					var entries = resp.result.entries || [];
@@ -1928,6 +2782,12 @@ html.light #header .logo {
 		messagesEl.classList.add('has-messages');
 		var div = document.createElement('div');
 		div.className = 'msg user';
+		// dir=auto + unicode-bidi:plaintext on the bubble lets each
+		// paragraph resolve its direction from its first strong-
+		// directional character — Arabic / Hebrew lines flow RTL,
+		// LTR scripts stay LTR, mixed paragraphs work without manual
+		// toggling.
+		div.setAttribute('dir', 'auto');
 		if (text) {
 			var p = document.createElement('div');
 			p.textContent = text;
@@ -1982,6 +2842,10 @@ html.light #header .logo {
 		div.className = 'msg assistant';
 		var content = document.createElement('div');
 		content.className = 'content';
+		// Same dir=auto / unicode-bidi:plaintext treatment as user
+		// bubbles — assistant replies in mixed-script render with the
+		// correct per-paragraph direction.
+		content.setAttribute('dir', 'auto');
 		div.appendChild(content);
 		messagesEl.appendChild(div);
 		scrollToBottom();
@@ -2260,6 +3124,11 @@ html.light #header .logo {
 		var div = document.createElement('div');
 		div.className = 'msg assistant';
 		div.style.borderColor = 'var(--error)';
+		// Mirror the addAssistantMsg dir=auto treatment so an RTL
+		// error message renders right-to-left like the rest of the
+		// bubbles. unicode-bidi: plaintext on .msg.assistant .content
+		// (set in CSS) handles per-paragraph resolution.
+		div.setAttribute('dir', 'auto');
 		var html = '<div class="content" style="color:var(--error)">' +
 			'<strong>' + escHtml(f.title) + '</strong>';
 		if (f.suggest) {
@@ -2327,6 +3196,32 @@ html.light #header .logo {
 			params: params,
 			id: msgId
 		}));
+
+		// Auto-name a fresh session from its first user turn. Mirrors
+		// the ChatGPT pattern: the sidebar entry should read "Auth
+		// migration plan" rather than "ws_default" once you've started
+		// a real conversation. Only fires when:
+		//   - the active session has no friendly name yet, AND
+		//   - the active session has zero prior entries (truly fresh),
+		//   - the message text is non-empty (pure-attachment messages
+		//     still keep the bare key — the default prompt isn't a
+		//     useful title).
+		// The rename RPC is fire-and-forget; if it fails the row
+		// keeps its bare-key label, which is fine.
+		if (text) {
+			var current = null;
+			for (var ci = 0; ci < sessionsCache.length; ci++) {
+				if (sessionsCache[ci].key === activeSessionKey) {
+					current = sessionsCache[ci];
+					break;
+				}
+			}
+			if (current && !current.name && (current.entryCount || 0) === 0) {
+				var label = text.replace(/\s+/g, ' ').trim();
+				if (label.length > 40) label = label.slice(0, 38).trim() + '…';
+				if (label) renameSession(activeSessionKey, label);
+			}
+		}
 
 		// Re-render the (now empty) chip strip and clear the input box.
 		// Keep the object URLs alive — addUserMsg's <img> tags still

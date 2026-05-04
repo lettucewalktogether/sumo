@@ -194,6 +194,13 @@ func (a *CronSchedulerAdapter) UpdateJobSchedule(name, schedule string) error {
 	return nil
 }
 
+// RunNowJob fires the named job once, off-cycle. Doesn't change the
+// schedule and doesn't persist (no on-disk state changed) — purely
+// triggers an async execution.
+func (a *CronSchedulerAdapter) RunNowJob(name string) error {
+	return a.Scheduler.RunNow(name)
+}
+
 // persist writes the current scheduler state to JobsFile via a write-rename
 // dance so a crash mid-write can't corrupt the file. No-op when JobsFile is "".
 func (a *CronSchedulerAdapter) persist() {

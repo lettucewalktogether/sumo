@@ -49,6 +49,10 @@ func (m *mockJobScheduler) UpdateJobSchedule(name, schedule string) error {
 	return nil
 }
 
+func (m *mockJobScheduler) RunNowJob(name string) error {
+	return nil
+}
+
 func TestCronToolName(t *testing.T) {
 	tool := &CronTool{}
 	assert.Equal(t, "cron", tool.Name())
