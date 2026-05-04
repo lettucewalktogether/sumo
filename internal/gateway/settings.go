@@ -51,24 +51,35 @@ func NewSettingsHandlers(cfg *config.Config, toolReg *tools.Registry, bootstrap 
 		},
 
 		SaveConfig: func(w http.ResponseWriter, r *http.Request) {
+			// writeErr emits a JSON error response with safely-escaped
+			// content. Earlier versions used fmt.Fprintf with a raw
+			// `{"error":"...%s..."}` template, which silently produced
+			// malformed JSON whenever the underlying error message
+			// contained a " or \. The resulting body then failed the
+			// browser's r.json() parse with a useless "Expected ',' or
+			// '}' after property value" message that hid the real cause.
+			writeErr := func(status int, prefix string, cause error) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error": prefix + ": " + cause.Error(),
+				})
+			}
+
 			body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MB limit
 			if err != nil {
-				http.Error(w, `{"error":"read body"}`, http.StatusBadRequest)
+				writeErr(http.StatusBadRequest, "read body", err)
 				return
 			}
 
 			var newCfg config.Config
 			if err := json.Unmarshal(body, &newCfg); err != nil {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprintf(w, `{"error":"invalid JSON: %s"}`, err.Error())
+				writeErr(http.StatusBadRequest, "invalid JSON", err)
 				return
 			}
 
 			if err := newCfg.Validate(); err != nil {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprintf(w, `{"error":"validation: %s"}`, err.Error())
+				writeErr(http.StatusBadRequest, "validation", err)
 				return
 			}
 
@@ -81,9 +92,7 @@ func NewSettingsHandlers(cfg *config.Config, toolReg *tools.Registry, bootstrap 
 			cfg.StripMCPAutoAdded(&newCfg)
 
 			if err := newCfg.Save(); err != nil {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, `{"error":"save: %s"}`, err.Error())
+				writeErr(http.StatusInternalServerError, "save", err)
 				return
 			}
 
