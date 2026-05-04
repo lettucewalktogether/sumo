@@ -143,15 +143,24 @@ Menu: **Chat**, **Jobs**, **Logs**, **Settings**, **Restart**, **Quit**.
 
 The Settings page has tabs for Agents, Providers, Models, Intelligence, Security, Messaging, MCP, Skills, Memory, and Gateway — most things you'd otherwise edit in `felix.json5` are reachable here.
 
-**Web chat** at `/chat`: agent + session selectors, streaming responses, light/dark toggle, inline tool-call display with collapsible output, inline "Re-authenticate" button when an MCP token expires, live trace panel, multi-modal attachments (see below).
+**Web chat** at `/chat`: ChatGPT/Claude-style layout with a left **sidebar** listing your conversations grouped by recency (Today / Yesterday / Last 7 days / Last 30 days / Older) — click a row to switch, **+ New chat** at the top to spawn one, hamburger toggle to collapse the sidebar entirely on desktop or slide it in as an overlay on narrow viewports. Main pane has agent picker, streaming responses, light/dark toggle, inline tool-call display with collapsible output, inline "Re-authenticate" button when an MCP token expires, live trace panel, multi-modal attachments (see below), connection-status pill (●live / ●reconnecting / ●error), and a token-usage chip in the sidebar footer.
 
 **Environment variables.** macOS `.app` bundles don't inherit shell environment variables; Felix.app loads `~/.zshrc` / `~/.bashrc` at startup, so `export ANTHROPIC_API_KEY=...` works. On Windows, set via System Settings or PowerShell `[System.Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY","sk-ant-...","User")`. Either way, you can put keys directly in `felix.json5` instead.
 
 
 
+## Web chat layout
+
+The web chat at `http://127.0.0.1:18789/chat` follows the conventional ChatGPT / Claude.ai layout:
+
+- **Sidebar (left, 260 px):** brand at the top, a **+ New chat** button, then the conversation list grouped by recency — **Today**, **Yesterday**, **Last 7 days**, **Last 30 days**, **Older**. Clicking a row switches to that conversation and reloads its history; the active row is tinted with the accent colour. The sidebar footer shows the **token-usage chip** for the active turn so it doesn't crowd the header.
+- **Main pane (right):** a slim header with the sidebar toggle (☰), agent picker, **Tools / Trace / Clear / theme** toggles, and a connection-status pill (●live, ●reconnecting, ●error). Below the header sit the messages, the live trace panel (when toggled on), and the input bar.
+- **Empty state:** before the first turn the messages pane shows a "Start a conversation" hint pointing at the input bar and the attach button — no blank space staring back at the user.
+- **Sidebar collapse:** desktop users can click ☰ to fully hide the sidebar and reclaim the width (state persists across reloads via `localStorage`). On narrow viewports (≤ 700 px) the sidebar starts hidden and slides in as an overlay when ☰ is tapped.
+
 ## Web chat attachments
 
-The web chat at `http://127.0.0.1:18789/chat` accepts files three ways: click the **+** button at the left edge of the input bar, drag and drop anywhere on the chat window, or paste a file or image from the clipboard. Up to **20 attachments per message**, with chips above the textarea showing each file's name, size, and either a thumbnail (decodable images) or a kind badge (**PDF** / **DOC** / **TXT** / **IMG**). Click the × on any chip to remove it before sending; the input area highlights green during a drag.
+The web chat accepts files three ways: click the **+** button at the left edge of the input bar, drag and drop anywhere on the chat window, or paste a file or image from the clipboard. Up to **20 attachments per message**, with chips above the textarea showing each file's name, size, and either a thumbnail (decodable images) or a kind badge (**PDF** / **DOC** / **TXT** / **IMG**). Click the × on any chip to remove it before sending; the input area highlights green during a drag.
 
 Image bytes that can't be decoded (corrupted upload, wrong MIME on a binary file) gracefully fall back to the **IMG** badge in the chip and a labelled pill in the user-message bubble — no broken-image icons. Attachments themselves are *not* persisted in session history (the on-disk format intentionally omits inline binary data), so reloading a past session shows the conversation text but not the inline thumbnails — re-attach if you want the images visible again in the bubble.
 

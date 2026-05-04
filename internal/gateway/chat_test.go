@@ -45,8 +45,29 @@ func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
 		`id="file-picker"`,
 		`id="attachment-strip"`,
 		`id="attach-error"`,
+		// Sidebar layout — sessions live here, not in a header dropdown.
+		`id="layout"`,
+		`id="sidebar"`,
+		`id="sidebar-toggle"`,
+		`id="new-chat-btn"`,
+		`id="session-list"`,
+		`id="session-list-empty"`,
+		`id="sidebar-footer"`,
+		`id="main-pane"`,
+		`id="messages-empty"`,
 	} {
 		assert.Contains(t, html, want, "expected element %q in served HTML", want)
+	}
+
+	// Stale-element regression — the original session dropdown and
+	// "+ New" header button were replaced by the sidebar; if either
+	// reappears the JS will have two competing inputs for the same
+	// state.
+	for _, gone := range []string{
+		`id="session-select"`,
+		`id="new-session-btn"`,
+	} {
+		assert.NotContains(t, html, gone, "expected pre-sidebar element %q to be gone", gone)
 	}
 
 	// Allowed MIME list (UI side) must mirror the server allowlist.
