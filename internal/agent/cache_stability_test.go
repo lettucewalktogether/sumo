@@ -107,13 +107,13 @@ func TestRequestPrefixIsByteStableAcrossTurns(t *testing.T) {
 	}
 
 	// Turn 1
-	events, err := rt.Run(context.Background(), "hello", nil)
+	events, err := rt.Run(context.Background(), "hello", nil, nil, nil)
 	require.NoError(t, err)
 	for range events {
 	}
 
 	// Turn 2 — same session, same agent, same tools.
-	events, err = rt.Run(context.Background(), "world", nil)
+	events, err = rt.Run(context.Background(), "world", nil, nil, nil)
 	require.NoError(t, err)
 	for range events {
 	}
@@ -263,7 +263,7 @@ func TestRuntimeCallsNormalizeToolSchema(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		events, err := rt.Run(context.Background(), "ping", nil)
+		events, err := rt.Run(context.Background(), "ping", nil, nil, nil)
 		require.NoError(t, err)
 		for range events {
 		}
@@ -314,7 +314,7 @@ func TestReasoningIsInRequestPrefix(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		events, err := rt.Run(context.Background(), "ping", nil)
+		events, err := rt.Run(context.Background(), "ping", nil, nil, nil)
 		require.NoError(t, err)
 		for range events {
 		}
@@ -341,7 +341,7 @@ func TestToolDefsSortedByNameInRequest(t *testing.T) {
 		Model: "rec-model", Workspace: t.TempDir(), MaxTurns: 5,
 	}
 
-	events, err := rt.Run(context.Background(), "hello", nil)
+	events, err := rt.Run(context.Background(), "hello", nil, nil, nil)
 	require.NoError(t, err)
 	for range events {
 	}
@@ -372,7 +372,7 @@ func TestRuntimeSendsStructuredSystemPromptParts(t *testing.T) {
 	require.NoError(t, err)
 	rt.MaxTurns = 5
 
-	events, err := rt.Run(context.Background(), "hi", nil)
+	events, err := rt.Run(context.Background(), "hi", nil, nil, nil)
 	require.NoError(t, err)
 	for range events {
 	}
@@ -403,7 +403,7 @@ func TestRuntimeStaticPromptByteStableAcrossTurns(t *testing.T) {
 	rt.MaxTurns = 5
 
 	for _, msg := range []string{"hello", "world"} {
-		ev, err := rt.Run(context.Background(), msg, nil)
+		ev, err := rt.Run(context.Background(), msg, nil, nil, nil)
 		require.NoError(t, err)
 		for range ev {
 		}
@@ -434,7 +434,7 @@ func TestRuntimeDynamicSuffixIncludesDate(t *testing.T) {
 	require.NoError(t, err)
 	rt.MaxTurns = 5
 
-	ev, err := rt.Run(context.Background(), "hi", nil)
+	ev, err := rt.Run(context.Background(), "hi", nil, nil, nil)
 	require.NoError(t, err)
 	for range ev {
 	}
@@ -475,7 +475,7 @@ func TestRuntimeNonAnthropicHasCacheLastMessageFalse(t *testing.T) {
 	require.NoError(t, err)
 	rt.MaxTurns = 5
 
-	ev, err := rt.Run(context.Background(), "hi", nil)
+	ev, err := rt.Run(context.Background(), "hi", nil, nil, nil)
 	require.NoError(t, err)
 	for range ev {
 	}
@@ -513,7 +513,7 @@ func TestRuntimeStaticPromptIncludesMemoryFilesContent(t *testing.T) {
 	require.NoError(t, err)
 	rt.MaxTurns = 5
 
-	ev, err := rt.Run(context.Background(), "hi", nil)
+	ev, err := rt.Run(context.Background(), "hi", nil, nil, nil)
 	require.NoError(t, err)
 	for range ev {
 	}

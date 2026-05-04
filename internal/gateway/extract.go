@@ -104,6 +104,38 @@ func isPlainTextMime(mime string) bool {
 	return ok
 }
 
+// allowedAudioMimes is the set of audio MIMEs the chat UI is willing
+// to upload. Whether they can actually be sent depends on the active
+// agent's provider Capabilities() — Gemini accepts these natively;
+// Anthropic / OpenAI / others reject audio entirely.
+var allowedAudioMimes = map[string]struct{}{
+	"audio/mpeg":   {}, // .mp3
+	"audio/mp4":    {}, // .m4a (sometimes)
+	"audio/wav":    {},
+	"audio/x-wav":  {},
+	"audio/webm":   {},
+	"audio/ogg":    {},
+	"audio/flac":   {},
+	"audio/aac":    {},
+	"audio/x-m4a":  {},
+}
+
+// nativePDFMime returns true for MIMEs that map to a native document
+// content block (Anthropic) / inline_data PDF part (Gemini) when the
+// active provider's Capabilities advertises NativePDF. Anything else
+// matching isExtractableDocMime falls through to text extraction.
+func nativePDFMime(mime string) bool {
+	return mime == "application/pdf"
+}
+
+// isAudioMime returns true if the MIME is in the audio allowlist.
+// Audio uploads are gated at the gateway boundary by the active
+// provider's NativeAudio capability.
+func isAudioMime(mime string) bool {
+	_, ok := allowedAudioMimes[mime]
+	return ok
+}
+
 // isExtractableDocMime returns true if the MIME is a binary document
 // type that needs a shell extractor (pdftotext, pandoc, …).
 func isExtractableDocMime(mime string) bool {

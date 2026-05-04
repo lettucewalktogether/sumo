@@ -766,7 +766,10 @@ func runChat(agentID, configPath, modelOverride string, noGateway bool) error {
 				}
 			}()
 
-			events, err := rt.Run(runCtx, prompt, []llm.ImageContent{img})
+			// CLI image-attachment path doesn't carry native PDFs / audio
+			// (those flow through the chat UI's WS path); pass nil for
+			// the new optional slices.
+			events, err := rt.Run(runCtx, prompt, []llm.ImageContent{img}, nil, nil)
 			if err != nil {
 				signal.Stop(sigCh)
 				runCancel()
@@ -849,7 +852,7 @@ func runChat(agentID, configPath, modelOverride string, noGateway bool) error {
 			}
 		}()
 
-		events, err := rt.Run(runCtx, text, images)
+		events, err := rt.Run(runCtx, text, images, nil, nil)
 		if err != nil {
 			signal.Stop(sigCh)
 			runCancel()

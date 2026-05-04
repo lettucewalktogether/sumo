@@ -25,14 +25,58 @@ type ImageContent struct {
 	Data     []byte // raw image bytes
 }
 
-// Message represents a conversation message.
+// DocumentContent holds a binary document (currently PDF) passed to
+// the model as a native attachment rather than text-extracted. Only
+// providers whose Capabilities() returns NativePDF=true accept these;
+// the gateway routes incompatible docs through the server-side text
+// extractor instead. Name is optional and surfaces in error messages
+// only — providers ignore it.
+type DocumentContent struct {
+	MimeType string
+	Data     []byte
+	Name     string
+}
+
+// AudioContent holds an audio attachment (mp3, wav, m4a, …) passed
+// natively to providers that support audio input. Capabilities()
+// reports NativeAudio per provider; the gateway rejects audio
+// uploads when no capable provider is selected.
+type AudioContent struct {
+	MimeType string
+	Data     []byte
+	Name     string
+}
+
+// Message represents a conversation message. The non-text content
+// slices (Images, Documents, Audio) carry attachments parallel to
+// Content. They're not serialized to the session JSONL — binary
+// attachments don't persist across sessions.
 type Message struct {
-	Role       string         `json:"role"` // "user", "assistant", "system"
-	Content    string         `json:"content,omitempty"`
-	Images     []ImageContent `json:"-"`                      // image attachments (not serialized)
-	ToolCalls  []ToolCall     `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"` // for tool results
-	IsError    bool           `json:"is_error,omitempty"`     // for tool results
+	Role       string            `json:"role"` // "user", "assistant", "system"
+	Content    string            `json:"content,omitempty"`
+	Images     []ImageContent    `json:"-"`
+	Documents  []DocumentContent `json:"-"`
+	Audio      []AudioContent    `json:"-"`
+	ToolCalls  []ToolCall        `json:"tool_calls,omitempty"`
+	ToolCallID string            `json:"tool_call_id,omitempty"` // for tool results
+	IsError    bool              `json:"is_error,omitempty"`     // for tool results
+}
+
+// Capabilities advertises which non-text input modalities a provider
+// can pass natively to the model. Image input is implicit — every
+// supported provider in the codebase already handles ImageContent —
+// so it's not flagged here. Used by the gateway to decide whether
+// to send a PDF as a native DocumentContent block or fall through
+// to server-side text extraction (pdftotext / pandoc), and to gate
+// audio attachments at the WebSocket boundary.
+type Capabilities struct {
+	// NativePDF reports whether the provider accepts PDFs as document
+	// content blocks (Anthropic) or inline_data parts (Gemini). When
+	// false, the gateway extracts text via the PR 2 path.
+	NativePDF bool
+	// NativeAudio reports whether the provider accepts audio
+	// attachments (Gemini supports inline_data with audio MIMEs).
+	NativeAudio bool
 }
 
 // ToolCall represents a tool invocation requested by the LLM.
@@ -154,6 +198,13 @@ type LLMProvider interface {
 	// Implementations must be deterministic — same input → same output
 	// in the same diagnostic order — to preserve prompt cache stability.
 	NormalizeToolSchema(tools []ToolDef) ([]ToolDef, []Diagnostic)
+	// Capabilities advertises which non-text modalities the provider
+	// accepts natively. Used by the gateway to choose between native
+	// document blocks and server-side text extraction, and to gate
+	// audio uploads at the WebSocket boundary. Implementations may
+	// return a fixed Capabilities value — model-specific gating
+	// happens at the gateway based on agent config.
+	Capabilities() Capabilities
 }
 
 // NonStreamingProvider is an optional capability some providers implement

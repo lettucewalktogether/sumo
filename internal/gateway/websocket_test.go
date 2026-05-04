@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/websocket"
+	"github.com/sausheong/felix/internal/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -159,21 +160,21 @@ func TestDecodeChatAttachments(t *testing.T) {
 	pngB64 := base64.StdEncoding.EncodeToString(pngBytes)
 
 	t.Run("nil_input", func(t *testing.T) {
-		out, err := decodeChatAttachments(ctx, nil)
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, nil)
 		require.NoError(t, err)
 		assert.Nil(t, out.Images)
 		assert.Nil(t, out.Docs)
 	})
 
 	t.Run("empty_slice", func(t *testing.T) {
-		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{})
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{})
 		require.NoError(t, err)
 		assert.Nil(t, out.Images)
 		assert.Nil(t, out.Docs)
 	})
 
 	t.Run("single_valid_png", func(t *testing.T) {
-		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "image/png", Data: pngB64, Name: "x.png"},
 		})
 		require.NoError(t, err)
@@ -184,7 +185,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 	})
 
 	t.Run("mime_normalised", func(t *testing.T) {
-		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "  IMAGE/JPEG  ", Data: pngB64},
 		})
 		require.NoError(t, err)
@@ -193,7 +194,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 	})
 
 	t.Run("multiple_mixed_mimes", func(t *testing.T) {
-		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "image/png", Data: pngB64},
 			{MimeType: "image/jpeg", Data: pngB64},
 			{MimeType: "image/gif", Data: pngB64},
@@ -205,24 +206,28 @@ func TestDecodeChatAttachments(t *testing.T) {
 	})
 
 	t.Run("rejects_unsupported_mime", func(t *testing.T) {
-		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
-			{MimeType: "audio/mpeg", Data: pngB64},
+		// PR 4 added audio MIMEs to the allowlist (gated by caps), so
+		// the previous "audio/mpeg" choice now yields a different error
+		// (caps-gating). Use a genuinely-unsupported MIME — Windows
+		// executables aren't in any of the four allowlists.
+		_, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
+			{MimeType: "application/x-msdownload", Data: pngB64},
 		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported mime")
 	})
 
 	t.Run("rejects_unsupported_mime_at_index", func(t *testing.T) {
-		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		_, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "image/png", Data: pngB64},
-			{MimeType: "audio/mp3", Data: pngB64},
+			{MimeType: "application/x-msdownload", Data: pngB64},
 		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "attachment 1")
 	})
 
 	t.Run("rejects_invalid_base64", func(t *testing.T) {
-		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		_, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "image/png", Data: "not!!!base64@@@"},
 		})
 		require.Error(t, err)
@@ -230,7 +235,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 	})
 
 	t.Run("rejects_empty_data", func(t *testing.T) {
-		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		_, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "image/png", Data: ""},
 		})
 		require.Error(t, err)
@@ -239,7 +244,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 
 	t.Run("rejects_oversized_image", func(t *testing.T) {
 		big := make([]byte, maxAttachmentBytes+1)
-		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		_, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "image/png", Data: base64.StdEncoding.EncodeToString(big)},
 		})
 		require.Error(t, err)
@@ -249,7 +254,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 	t.Run("accepts_image_at_size_cap", func(t *testing.T) {
 		atCap := make([]byte, maxAttachmentBytes)
 		atCap[0] = 0xFF
-		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "image/png", Data: base64.StdEncoding.EncodeToString(atCap)},
 		})
 		require.NoError(t, err)
@@ -262,7 +267,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 		for i := range atts {
 			atts[i] = chatAttachmentParam{MimeType: "image/png", Data: pngB64}
 		}
-		_, err := decodeChatAttachments(ctx, atts)
+		_, err := decodeChatAttachments(ctx, llm.Capabilities{}, atts)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "too many")
 	})
@@ -272,7 +277,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 		for i := range atts {
 			atts[i] = chatAttachmentParam{MimeType: "image/png", Data: pngB64}
 		}
-		out, err := decodeChatAttachments(ctx, atts)
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, atts)
 		require.NoError(t, err)
 		assert.Len(t, out.Images, maxAttachmentCount)
 	})
@@ -281,7 +286,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 
 	t.Run("plain_text_utf8", func(t *testing.T) {
 		body := "Hello — 世界! مرحبا."
-		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "text/markdown", Data: base64.StdEncoding.EncodeToString([]byte(body)), Name: "note.md"},
 		})
 		require.NoError(t, err)
@@ -292,7 +297,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 	})
 
 	t.Run("plain_text_unnamed_falls_back", func(t *testing.T) {
-		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "text/plain", Data: base64.StdEncoding.EncodeToString([]byte("hi"))},
 		})
 		require.NoError(t, err)
@@ -302,7 +307,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 
 	t.Run("strips_utf8_bom", func(t *testing.T) {
 		body := []byte("\xEF\xBB\xBFhello")
-		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "text/plain", Data: base64.StdEncoding.EncodeToString(body)},
 		})
 		require.NoError(t, err)
@@ -318,7 +323,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 			0x6C, 0x00,
 			0x6C, 0x00,
 			0x6F, 0x00}
-		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "text/plain", Data: base64.StdEncoding.EncodeToString(body)},
 		})
 		require.NoError(t, err)
@@ -333,7 +338,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 			0x00, 0x6C,
 			0x00, 0x6C,
 			0x00, 0x6F}
-		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "text/plain", Data: base64.StdEncoding.EncodeToString(body)},
 		})
 		require.NoError(t, err)
@@ -349,7 +354,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 		for _, r := range []byte("Hello world this is a longer ASCII test string.") {
 			body = append(body, r, 0x00)
 		}
-		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "text/plain", Data: base64.StdEncoding.EncodeToString(body)},
 		})
 		require.NoError(t, err)
@@ -363,7 +368,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 		// — so the decoder must return a "save as UTF-8" hint rather
 		// than silently mangle bytes.
 		body := []byte("caf\xE9 — not utf-8 here")
-		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		_, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "text/plain", Data: base64.StdEncoding.EncodeToString(body)},
 		})
 		require.Error(t, err)
@@ -378,7 +383,7 @@ func TestDecodeChatAttachments(t *testing.T) {
 		}
 		// A minimal PDF generated inline — simpler than carrying a fixture.
 		pdf := minimalPDF(t, "Hello world from PDF.")
-		out, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "application/pdf", Data: base64.StdEncoding.EncodeToString(pdf), Name: "test.pdf"},
 		})
 		require.NoError(t, err)
@@ -394,11 +399,73 @@ func TestDecodeChatAttachments(t *testing.T) {
 			"application/pdf": {bin: "this-binary-does-not-exist-xyz", args: nil, pkgHint: "install xyz"},
 		}
 		body := []byte("not a real pdf")
-		_, err := decodeChatAttachments(ctx, []chatAttachmentParam{
+		_, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
 			{MimeType: "application/pdf", Data: base64.StdEncoding.EncodeToString(body)},
 		})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "install xyz")
+	})
+
+	// --- Capability routing (PR 4) -------------------------------
+
+	t.Run("pdf_routes_native_when_caps_advertise_NativePDF", func(t *testing.T) {
+		body := []byte("%PDF-1.4 not actually parsed for this branch")
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{NativePDF: true}, []chatAttachmentParam{
+			{MimeType: "application/pdf", Data: base64.StdEncoding.EncodeToString(body), Name: "report.pdf"},
+		})
+		require.NoError(t, err)
+		// Bytes go to NativeDocs verbatim — no extraction, no
+		// pdftotext shell-out at all.
+		require.Len(t, out.NativeDocs, 1)
+		assert.Equal(t, "application/pdf", out.NativeDocs[0].MimeType)
+		assert.Equal(t, body, out.NativeDocs[0].Data)
+		assert.Equal(t, "report.pdf", out.NativeDocs[0].Name)
+		// And nothing leaked into Docs (which is the extraction path).
+		assert.Empty(t, out.Docs)
+	})
+
+	t.Run("audio_accepted_when_caps_advertise_NativeAudio", func(t *testing.T) {
+		mp3Body := []byte{0xFF, 0xFB, 0x90, 0x00, 'h', 'i'} // fake MP3 header bytes
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{NativeAudio: true}, []chatAttachmentParam{
+			{MimeType: "audio/mpeg", Data: base64.StdEncoding.EncodeToString(mp3Body), Name: "voice.mp3"},
+		})
+		require.NoError(t, err)
+		require.Len(t, out.Audio, 1)
+		assert.Equal(t, "audio/mpeg", out.Audio[0].MimeType)
+		assert.Equal(t, mp3Body, out.Audio[0].Data)
+		assert.Equal(t, "voice.mp3", out.Audio[0].Name)
+	})
+
+	t.Run("audio_rejected_when_provider_lacks_NativeAudio", func(t *testing.T) {
+		// Same payload as the accepted-when-capable test, but caps
+		// has NativeAudio=false (e.g. Anthropic / OpenAI / Qwen).
+		mp3Body := []byte{0xFF, 0xFB, 0x90, 0x00, 'h', 'i'}
+		_, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
+			{MimeType: "audio/mpeg", Data: base64.StdEncoding.EncodeToString(mp3Body), Name: "voice.mp3"},
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "audio not supported")
+		// Error must surface the offending attachment's display name
+		// so the user can identify which file to remove.
+		assert.Contains(t, err.Error(), "voice.mp3")
+	})
+
+	t.Run("pdf_falls_back_to_extraction_when_caps_lack_NativePDF", func(t *testing.T) {
+		// When caps say no native PDF, the decoder routes through
+		// the PR 2 extractor path. We need a real PDF here for
+		// pdftotext to succeed; reuse the minimalPDF helper.
+		if _, err := exec.LookPath("pdftotext"); err != nil {
+			t.Skip("pdftotext not installed")
+		}
+		pdf := minimalPDF(t, "Capability fallback test.")
+		out, err := decodeChatAttachments(ctx, llm.Capabilities{}, []chatAttachmentParam{
+			{MimeType: "application/pdf", Data: base64.StdEncoding.EncodeToString(pdf), Name: "fallback.pdf"},
+		})
+		require.NoError(t, err)
+		// Falls through to Docs (extracted text), NOT NativeDocs.
+		assert.Empty(t, out.NativeDocs, "no native route when caps lack NativePDF")
+		require.Len(t, out.Docs, 1)
+		assert.Contains(t, out.Docs[0].Text, "Capability fallback test")
 	})
 }
 

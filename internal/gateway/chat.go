@@ -1309,7 +1309,7 @@ html.light #header .logo {
 	<div id="attachment-strip" aria-label="Attached files"></div>
 	<div id="input-area">
 		<button id="attach-btn" type="button" title="Attach an image, document, or text file" aria-label="Attach file">+</button>
-		<input id="file-picker" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/bmp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/*,application/json,application/xml,application/x-yaml,application/yaml,application/javascript,application/x-sh,.md,.txt,.csv,.json,.yaml,.yml,.xml,.html,.css,.js,.ts,.go,.py,.rb,.rs,.toml,.sql,.sh,.log" multiple style="display:none">
+		<input id="file-picker" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/bmp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/*,application/json,application/xml,application/x-yaml,application/yaml,application/javascript,application/x-sh,audio/mpeg,audio/mp4,audio/wav,audio/x-wav,audio/webm,audio/ogg,audio/flac,audio/aac,audio/x-m4a,.md,.txt,.csv,.json,.yaml,.yml,.xml,.html,.css,.js,.ts,.go,.py,.rb,.rs,.toml,.sql,.sh,.log,.mp3,.m4a,.wav,.webm,.ogg,.oga,.flac,.aac" multiple style="display:none">
 		<textarea id="input" rows="1" placeholder="Type a message or drop a file..." dir="auto" lang="" autocapitalize="off" autocorrect="off" spellcheck="true" autofocus></textarea>
 		<button id="send-btn" disabled>Send</button>
 		<button id="stop-btn">Stop</button>
@@ -1389,14 +1389,28 @@ html.light #header .logo {
 		'application/sql': true, 'application/x-sql': true,
 		'application/x-tex': true
 	};
-	// MIMEs the server extracts via shell tools (pdftotext, pandoc).
+	// MIMEs the server extracts via shell tools (pdftotext, pandoc) or
+	// passes natively to capable providers (PDFs on Anthropic / Gemini).
 	var ALLOWED_DOC_MIMES = {
 		'application/pdf': true,
 		'application/vnd.openxmlformats-officedocument.wordprocessingml.document': true
 	};
+	// Audio MIMEs (PR 4). Only sent when the active agent's provider
+	// advertises NativeAudio capability — otherwise rejected client-
+	// side with a "switch to Gemini" hint.
+	var ALLOWED_AUDIO_MIMES = {
+		'audio/mpeg':   true, // .mp3
+		'audio/mp4':    true,
+		'audio/wav':    true, 'audio/x-wav': true,
+		'audio/webm':   true,
+		'audio/ogg':    true,
+		'audio/flac':   true,
+		'audio/aac':    true,
+		'audio/x-m4a':  true
+	};
 	// Browsers leave .md / unusual extensions with empty type. Map a
-	// few common text-ish extensions to a canonical MIME so the server
-	// allowlist (and the chip kind classifier) accept them.
+	// few common text-ish + audio extensions to a canonical MIME so the
+	// server allowlist (and the chip kind classifier) accept them.
 	var EXT_MIME_FALLBACK = {
 		md: 'text/markdown', markdown: 'text/markdown',
 		txt: 'text/plain', log: 'text/plain',
@@ -1412,7 +1426,12 @@ html.light #header .logo {
 		sh: 'application/x-sh', bash: 'application/x-sh',
 		rb: 'application/x-ruby', go: 'application/x-go',
 		rs: 'application/x-rust', sql: 'application/sql',
-		tex: 'application/x-tex'
+		tex: 'application/x-tex',
+		// Audio extensions
+		mp3: 'audio/mpeg', m4a: 'audio/x-m4a',
+		wav: 'audio/wav',
+		webm: 'audio/webm', ogg: 'audio/ogg', oga: 'audio/ogg',
+		flac: 'audio/flac', aac: 'audio/aac'
 	};
 	function detectMime(file) {
 		var t = (file.type || '').toLowerCase();
@@ -1425,12 +1444,26 @@ html.light #header .logo {
 	function isImageMime(m)    { return ALLOWED_IMAGE_MIMES[m] === true; }
 	function isPlainTextMime(m){ return m.indexOf('text/') === 0 || ALLOWED_TEXT_MIMES[m] === true; }
 	function isDocMime(m)      { return ALLOWED_DOC_MIMES[m] === true; }
-	function isAllowedMime(m)  { return isImageMime(m) || isPlainTextMime(m) || isDocMime(m); }
+	function isAudioMime(m)    { return ALLOWED_AUDIO_MIMES[m] === true; }
+	function isAllowedMime(m)  { return isImageMime(m) || isPlainTextMime(m) || isDocMime(m) || isAudioMime(m); }
 	function attachmentKind(m) {
 		if (isImageMime(m)) return 'image';
+		if (isAudioMime(m)) return 'audio';
 		if (isDocMime(m)) return 'doc';
 		if (isPlainTextMime(m)) return 'text';
 		return 'other';
+	}
+
+	// Per-agent capabilities cache. Populated from agent.status's
+	// per-agent capabilities field, refreshed on agent switch via
+	// the agent.capabilities RPC. Used to gate audio uploads at
+	// addFiles time so the user gets immediate feedback
+	// rather than a server-side rejection after the network round-
+	// trip.
+	var agentCaps = {}; // agentId → {nativePDF, nativeAudio}
+	function activeAgentCaps() {
+		var id = agentSelect && agentSelect.value;
+		return (id && agentCaps[id]) || { nativePDF: false, nativeAudio: false };
 	}
 	// Pending attachments for the next chat.send.
 	// Each entry: { name, mimeType, kind, sizeBytes, dataB64, objectUrl? }.
@@ -2615,6 +2648,7 @@ html.light #header .logo {
 					var agents = resp.result.agents || [];
 					agentSelect.innerHTML = '';
 					agentWindows = {};
+					agentCaps = {};
 					for (var i = 0; i < agents.length; i++) {
 						var opt = document.createElement('option');
 						opt.value = agents[i].id;
@@ -2622,6 +2656,16 @@ html.light #header .logo {
 						agentSelect.appendChild(opt);
 						if (agents[i].context_window) {
 							agentWindows[agents[i].id] = agents[i].context_window;
+						}
+						// PR 4: per-agent multi-modal capabilities. Used
+						// by addFiles to gate audio uploads on the
+						// active agent's provider before the WS round-
+						// trip surfaces a server-side rejection.
+						if (agents[i].capabilities) {
+							agentCaps[agents[i].id] = {
+								nativePDF:   agents[i].capabilities.nativePDF === true,
+								nativeAudio: agents[i].capabilities.nativeAudio === true
+							};
 						}
 					}
 					renderTokenChip();
@@ -3403,6 +3447,14 @@ html.light #header .logo {
 				continue;
 			}
 			var kind = attachmentKind(mime);
+			// Audio gating — surface the "switch to Gemini" hint in the
+			// UI before the upload even starts. Without this the user
+			// gets a server-side rejection only after the WS round-trip,
+			// which is slower feedback for an obvious mismatch.
+			if (kind === 'audio' && !activeAgentCaps().nativeAudio) {
+				rejections.push((f.name || 'audio') + ': audio uploads need a Gemini agent (current agent is not capable)');
+				continue;
+			}
 			var cap = (kind === 'image') ? MAX_IMAGE_BYTES : MAX_DOC_BYTES;
 			if (f.size > cap) {
 				rejections.push((f.name || 'file') + ': too large (' + formatBytes(f.size) + ' > ' + formatBytes(cap) + ')');

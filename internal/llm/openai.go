@@ -377,6 +377,22 @@ func (p *OpenAIProvider) NormalizeToolSchema(tools []ToolDef) ([]ToolDef, []Diag
 	return applyStripList(tools, openaiUnsupportedFields)
 }
 
+// Capabilities reports zero native non-image modalities for OpenAI
+// and openai-compatible kinds (Ollama, LM Studio, DeepSeek, SEA-LION,
+// vLLM, …). The OpenAI Files API does support PDFs but it's a
+// different request shape (file_id-based) that this provider doesn't
+// yet implement; the gateway falls through to the PR 2 server-side
+// text-extraction path for PDFs on these providers. Audio input on
+// gpt-4o-audio is also model-specific and not wired today.
+//
+// "openai-compatible" backends rarely expose PDF/audio anyway, so the
+// conservative default is right: extract text on the gateway, send
+// as inline message text. If a specific backend grows native support
+// later it can ship a custom kind / provider with overridden caps.
+func (p *OpenAIProvider) Capabilities() Capabilities {
+	return Capabilities{NativePDF: false, NativeAudio: false}
+}
+
 // BuildReasoningEffort maps a ReasoningMode to OpenAI's reasoning_effort
 // string. Returns ("", false) when reasoning is off, the model doesn't
 // support it, or the provider Kind suppresses it (openai-compatible /

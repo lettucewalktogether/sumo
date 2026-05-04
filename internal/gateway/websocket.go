@@ -251,6 +251,8 @@ func (h *WebSocketHandler) dispatch(conn *websocket.Conn, req JSONRPCRequest) {
 		h.handleChatCompact(conn, req)
 	case "agent.status":
 		h.handleAgentStatus(conn, req)
+	case "agent.capabilities":
+		h.handleAgentCapabilities(conn, req)
 	case "session.list":
 		h.handleSessionList(conn, req)
 	case "session.new":
@@ -338,18 +340,31 @@ type extractedDoc struct {
 
 // decodedAttachments is the parsed and validated form of a chat.send
 // attachment list. Image attachments flow into rt.Run as native image
-// content; document/text attachments are extracted server-side and
-// inlined into the user message text.
+// content; PDFs go to NativeDocs when the active provider's
+// Capabilities advertises NativePDF, otherwise fall through to
+// server-side text extraction (Docs). Audio attachments require
+// NativeAudio — rejected at decode time on incompatible providers
+// rather than silently dropped. Plain-text MIMEs always extract
+// inline since every provider speaks text.
 type decodedAttachments struct {
-	Images []llm.ImageContent
-	Docs   []extractedDoc
+	Images     []llm.ImageContent
+	Docs       []extractedDoc          // text extracted via pdftotext / pandoc / inline UTF-8
+	NativeDocs []llm.DocumentContent   // PDFs sent as native document blocks
+	Audio      []llm.AudioContent      // audio sent natively (Gemini)
 }
 
-// decodeChatAttachments validates, base64-decodes, and (for docs)
-// extracts the chat.send attachments. It enforces the MIME allowlist,
-// per-image size cap, per-document size cap, and per-message count cap.
-// Returned errors are safe to send back to the client.
-func decodeChatAttachments(ctx context.Context, atts []chatAttachmentParam) (decodedAttachments, error) {
+// decodeChatAttachments validates, base64-decodes, and routes the
+// chat.send attachments based on the active provider's capabilities.
+// caps is the LLM provider's Capabilities() — the decoder uses it to
+// pick between native PDF blocks and text extraction, and to gate
+// audio uploads. It enforces the MIME allowlist, per-image size cap,
+// per-document size cap, per-audio size cap, and per-message count
+// cap. Returned errors are safe to send back to the client.
+//
+// Argument order is (ctx, caps, atts) — caps slots between ctx and
+// the variable input, matching the "config first, payload last"
+// convention used elsewhere in the package.
+func decodeChatAttachments(ctx context.Context, caps llm.Capabilities, atts []chatAttachmentParam) (decodedAttachments, error) {
 	var out decodedAttachments
 	if len(atts) == 0 {
 		return out, nil
@@ -361,7 +376,8 @@ func decodeChatAttachments(ctx context.Context, atts []chatAttachmentParam) (dec
 		mime := strings.ToLower(strings.TrimSpace(att.MimeType))
 		isImage := isImageMime(mime)
 		isDoc := isPlainTextMime(mime) || isExtractableDocMime(mime)
-		if !isImage && !isDoc {
+		isAudio := isAudioMime(mime)
+		if !isImage && !isDoc && !isAudio {
 			return decodedAttachments{}, fmt.Errorf("attachment %d: unsupported mime type %q", i, att.MimeType)
 		}
 
@@ -373,6 +389,7 @@ func decodeChatAttachments(ctx context.Context, atts []chatAttachmentParam) (dec
 			return decodedAttachments{}, fmt.Errorf("attachment %d: empty data", i)
 		}
 
+		// --- Image path ----------------------------------------
 		if isImage {
 			if len(data) > maxAttachmentBytes {
 				return decodedAttachments{}, fmt.Errorf("attachment %d: too large (%d > %d bytes)", i, len(data), maxAttachmentBytes)
@@ -381,9 +398,39 @@ func decodeChatAttachments(ctx context.Context, atts []chatAttachmentParam) (dec
 			continue
 		}
 
-		// Document path.
+		// --- Audio path ----------------------------------------
+		if isAudio {
+			if !caps.NativeAudio {
+				return decodedAttachments{}, fmt.Errorf("attachment %d (%s): audio not supported by the active agent's provider — switch to a Gemini agent or remove the attachment",
+					i, attachmentDisplayName(att, i))
+			}
+			if len(data) > maxAttachmentInputBytes {
+				return decodedAttachments{}, fmt.Errorf("attachment %d: too large (%d > %d bytes)", i, len(data), maxAttachmentInputBytes)
+			}
+			out.Audio = append(out.Audio, llm.AudioContent{
+				MimeType: mime,
+				Data:     data,
+				Name:     attachmentDisplayName(att, i),
+			})
+			continue
+		}
+
+		// --- Document / text path ------------------------------
 		if len(data) > maxAttachmentInputBytes {
 			return decodedAttachments{}, fmt.Errorf("attachment %d: too large (%d > %d bytes)", i, len(data), maxAttachmentInputBytes)
+		}
+		// Native PDF route: when the provider advertises NativePDF
+		// and the MIME is application/pdf, ship the bytes through
+		// as DocumentContent rather than extracting text. Layout +
+		// embedded images survive end-to-end, which the extracted-
+		// text path drops.
+		if caps.NativePDF && nativePDFMime(mime) {
+			out.NativeDocs = append(out.NativeDocs, llm.DocumentContent{
+				MimeType: mime,
+				Data:     data,
+				Name:     attachmentDisplayName(att, i),
+			})
+			continue
 		}
 		text, err := extractAttachmentText(ctx, mime, data)
 		if err != nil {
@@ -449,50 +496,14 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 		params.AgentID = "default"
 	}
 
-	// Bound the extraction stage at request scope: cancelled if the
-	// client disconnects mid-decode.
-	decodeCtx, decodeCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	decoded, err := decodeChatAttachments(decodeCtx, params.Attachments)
-	decodeCancel()
-	if err != nil {
-		writeJSON(conn, JSONRPCResponse{
-			JSONRPC: "2.0",
-			Error:   map[string]any{"code": -32602, "message": "Invalid attachment: " + err.Error()},
-			ID:      req.ID,
-		})
-		return
-	}
-
-	// Match the CLI default: a pure-attachment message gets a default
-	// prompt so providers always see a non-empty user text part. Pick
-	// the prompt based on what was attached so the model isn't asked
-	// "what's in this image?" when the user attached a PDF.
-	if strings.TrimSpace(params.Text) == "" {
-		switch {
-		case len(decoded.Images) > 0 && len(decoded.Docs) == 0:
-			params.Text = "What's in this image?"
-		case len(decoded.Docs) > 0 && len(decoded.Images) == 0:
-			params.Text = "Please review the attached document."
-		case len(decoded.Images) > 0 || len(decoded.Docs) > 0:
-			params.Text = "Please review the attached files."
-		default:
-			writeJSON(conn, JSONRPCResponse{
-				JSONRPC: "2.0",
-				Error:   map[string]any{"code": -32602, "message": "Empty message: text or attachments required"},
-				ID:      req.ID,
-			})
-			return
-		}
-	}
-
-	// Inline extracted document text into the user message as fenced
-	// blocks. Image attachments stay as native multimodal input below.
-	params.Text = composeUserText(params.Text, decoded.Docs)
-
+	// Resolve agent + provider FIRST so the attachment decoder knows
+	// which Capabilities to gate against (native PDF / native audio).
+	// A PDF on an Anthropic agent goes straight through as a document
+	// block; the same PDF on an OpenAI agent is text-extracted; an
+	// audio file on a non-Gemini agent is rejected at decode time.
 	h.mu.RLock()
 	agentCfg, ok := h.config.GetAgent(params.AgentID)
 	h.mu.RUnlock()
-
 	if !ok {
 		writeJSON(conn, JSONRPCResponse{
 			JSONRPC: "2.0",
@@ -516,6 +527,54 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 		})
 		return
 	}
+	caps := provider.Capabilities()
+
+	// Bound the extraction stage at request scope: cancelled if the
+	// client disconnects mid-decode.
+	decodeCtx, decodeCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	decoded, err := decodeChatAttachments(decodeCtx, caps, params.Attachments)
+	decodeCancel()
+	if err != nil {
+		writeJSON(conn, JSONRPCResponse{
+			JSONRPC: "2.0",
+			Error:   map[string]any{"code": -32602, "message": "Invalid attachment: " + err.Error()},
+			ID:      req.ID,
+		})
+		return
+	}
+
+	// Match the CLI default: a pure-attachment message gets a default
+	// prompt so providers always see a non-empty user text part. Pick
+	// the prompt based on what was attached so the model isn't asked
+	// "what's in this image?" when the user attached a PDF or audio.
+	if strings.TrimSpace(params.Text) == "" {
+		hasImages := len(decoded.Images) > 0
+		hasDocs := len(decoded.Docs) > 0 || len(decoded.NativeDocs) > 0
+		hasAudio := len(decoded.Audio) > 0
+		anyAtt := hasImages || hasDocs || hasAudio
+		switch {
+		case hasImages && !hasDocs && !hasAudio:
+			params.Text = "What's in this image?"
+		case hasDocs && !hasImages && !hasAudio:
+			params.Text = "Please review the attached document."
+		case hasAudio && !hasImages && !hasDocs:
+			params.Text = "Please transcribe and summarize the attached audio."
+		case anyAtt:
+			params.Text = "Please review the attached files."
+		default:
+			writeJSON(conn, JSONRPCResponse{
+				JSONRPC: "2.0",
+				Error:   map[string]any{"code": -32602, "message": "Empty message: text or attachments required"},
+				ID:      req.ID,
+			})
+			return
+		}
+	}
+
+	// Inline extracted document text (PR 2 path) into the user message
+	// as fenced blocks. Native PDF/audio attachments stay as binary
+	// content sent through to rt.Run below.
+	params.Text = composeUserText(params.Text, decoded.Docs)
 
 	// Load or create session — use explicit param, per-connection tracking, or default
 	sessionKey := params.SessionKey
@@ -636,7 +695,9 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 	trace.Mark("ws.received",
 		"msg_chars", len(params.Text),
 		"image_count", len(decoded.Images),
-		"doc_count", len(decoded.Docs))
+		"doc_count", len(decoded.Docs),
+		"native_doc_count", len(decoded.NativeDocs),
+		"audio_count", len(decoded.Audio))
 	runCtx = agent.WithTrace(runCtx, trace)
 
 	// Track this run so chat.abort and disconnect can cancel it
@@ -644,7 +705,7 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 	h.activeRuns[conn] = runCancel
 	h.mu.Unlock()
 
-	events, err := rt.Run(runCtx, params.Text, decoded.Images)
+	events, err := rt.Run(runCtx, params.Text, decoded.Images, decoded.NativeDocs, decoded.Audio)
 	if err != nil {
 		runCancel()
 		h.mu.Lock()
@@ -851,16 +912,34 @@ func (h *WebSocketHandler) handleChatCompact(conn *websocket.Conn, req JSONRPCRe
 func (h *WebSocketHandler) handleAgentStatus(conn *websocket.Conn, req JSONRPCRequest) {
 	h.mu.RLock()
 	agents := h.config.Agents.List
+	providers := h.providers
 	h.mu.RUnlock()
 
 	var statuses []map[string]any
 	for _, a := range agents {
+		// Each agent reports its provider's capabilities so the UI can
+		// gate file-picker MIMEs without a separate round-trip per
+		// agent change. Capabilities can vary across agents in the
+		// same install (an Anthropic agent vs. a Gemini agent vs. an
+		// openai-compatible local agent).
+		var nativePDF, nativeAudio bool
+		if pname, _ := llm.ParseProviderModel(a.Model); pname != "" {
+			if p, ok := providers[pname]; ok {
+				caps := p.Capabilities()
+				nativePDF = caps.NativePDF
+				nativeAudio = caps.NativeAudio
+			}
+		}
 		statuses = append(statuses, map[string]any{
 			"id":             a.ID,
 			"name":           a.Name,
 			"model":          a.Model,
 			"workspace":      a.Workspace,
 			"context_window": tokens.ContextWindowFor(a.Model, a.ContextWindow),
+			"capabilities": map[string]bool{
+				"nativePDF":   nativePDF,
+				"nativeAudio": nativeAudio,
+			},
 		})
 	}
 
@@ -868,6 +947,52 @@ func (h *WebSocketHandler) handleAgentStatus(conn *websocket.Conn, req JSONRPCRe
 		JSONRPC: "2.0",
 		Result:  map[string]any{"agents": statuses},
 		ID:      req.ID,
+	})
+}
+
+// handleAgentCapabilities returns the active capabilities for one
+// agent. Cheaper alternative to agent.status when the UI has already
+// loaded the agent list and just needs to refresh caps after a
+// switch — e.g. on agent dropdown change.
+type agentCapabilitiesParams struct {
+	AgentID string `json:"agentId"`
+}
+
+func (h *WebSocketHandler) handleAgentCapabilities(conn *websocket.Conn, req JSONRPCRequest) {
+	var params agentCapabilitiesParams
+	if err := json.Unmarshal(req.Params, &params); err != nil || params.AgentID == "" {
+		writeJSON(conn, JSONRPCResponse{
+			JSONRPC: "2.0",
+			Error:   map[string]any{"code": -32602, "message": "agentId required"},
+			ID:      req.ID,
+		})
+		return
+	}
+	h.mu.RLock()
+	agentCfg, ok := h.config.GetAgent(params.AgentID)
+	providers := h.providers
+	h.mu.RUnlock()
+	if !ok {
+		writeJSON(conn, JSONRPCResponse{
+			JSONRPC: "2.0",
+			Error:   map[string]any{"code": -32602, "message": "Unknown agent: " + params.AgentID},
+			ID:      req.ID,
+		})
+		return
+	}
+	pname, _ := llm.ParseProviderModel(agentCfg.Model)
+	caps := llm.Capabilities{}
+	if p, ok := providers[pname]; ok {
+		caps = p.Capabilities()
+	}
+	writeJSON(conn, JSONRPCResponse{
+		JSONRPC: "2.0",
+		Result: map[string]any{
+			"agentId":     params.AgentID,
+			"nativePDF":   caps.NativePDF,
+			"nativeAudio": caps.NativeAudio,
+		},
+		ID: req.ID,
 	})
 }
 

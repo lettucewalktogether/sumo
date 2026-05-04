@@ -73,11 +73,32 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, req ChatRequest) (<-cha
 				})
 			} else {
 				var parts []*genai.Part
+				// Images, documents (PDFs), and audio all ride the same
+				// inline_data part shape. Gemini accepts every MIME type
+				// the chat UI can produce as long as the bytes are
+				// passed verbatim with the right media type — no
+				// per-modality plumbing needed beyond the kind tag.
 				for _, img := range m.Images {
 					parts = append(parts, &genai.Part{
 						InlineData: &genai.Blob{
 							Data:     img.Data,
 							MIMEType: img.MimeType,
+						},
+					})
+				}
+				for _, doc := range m.Documents {
+					parts = append(parts, &genai.Part{
+						InlineData: &genai.Blob{
+							Data:     doc.Data,
+							MIMEType: doc.MimeType,
+						},
+					})
+				}
+				for _, aud := range m.Audio {
+					parts = append(parts, &genai.Part{
+						InlineData: &genai.Blob{
+							Data:     aud.Data,
+							MIMEType: aud.MimeType,
 						},
 					})
 				}
@@ -255,6 +276,16 @@ var geminiUnsupportedFields = []string{"anyOf", "oneOf", "not", "$ref", "format"
 // dotted JSON path.
 func (p *GeminiProvider) NormalizeToolSchema(tools []ToolDef) ([]ToolDef, []Diagnostic) {
 	return applyStripList(tools, geminiUnsupportedFields)
+}
+
+// Capabilities reports Gemini's native multi-modal surface. Both PDFs
+// and audio go through the same generic inline_data part path, so the
+// Gemini provider takes them natively rather than via server-side
+// extraction or rejection. Image input flows through the existing
+// ImageContent path and isn't surfaced here (it's implicit on every
+// supported provider).
+func (p *GeminiProvider) Capabilities() Capabilities {
+	return Capabilities{NativePDF: true, NativeAudio: true}
 }
 
 // BuildThinkingBudget maps a ReasoningMode to Gemini's thinking budget

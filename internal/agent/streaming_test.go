@@ -251,7 +251,7 @@ func TestRun_StreamingKickoffOverlapsWithLLMStream(t *testing.T) {
 		Session: session.NewSession("a", "k"),
 		AgentID: "a", Model: "test", MaxTurns: 2,
 	}
-	events, err := rt.Run(context.Background(), "go", nil)
+	events, err := rt.Run(context.Background(), "go", nil, nil, nil)
 	require.NoError(t, err)
 
 	// Stream-end timestamp is when EventDone arrives on the channel. The
@@ -315,7 +315,7 @@ func TestRun_StreamingStopsAtFirstUnsafe(t *testing.T) {
 		Session: session.NewSession("a", "k"),
 		AgentID: "a", Model: "test", MaxTurns: 2,
 	}
-	events, err := rt.Run(context.Background(), "go", nil)
+	events, err := rt.Run(context.Background(), "go", nil, nil, nil)
 	require.NoError(t, err)
 	for range events {
 	}
@@ -390,7 +390,7 @@ func TestRun_StreamingDisabledMatchesNonStreaming(t *testing.T) {
 		Session: session.NewSession("a", "k"),
 		AgentID: "a", Model: "test", MaxTurns: 2,
 	}
-	events, err := rt.Run(context.Background(), "go", nil)
+	events, err := rt.Run(context.Background(), "go", nil, nil, nil)
 	require.NoError(t, err)
 
 	// We track when the LLM stream-end happened by observing when the first
@@ -455,7 +455,7 @@ func TestRun_StreamingAbortMidKickoffPairsAllEntries(t *testing.T) {
 
 	beforeGoroutines := runtime.NumGoroutine()
 
-	events, err := rt.Run(ctx, "go", nil)
+	events, err := rt.Run(ctx, "go", nil, nil, nil)
 	require.NoError(t, err)
 
 	// Cancel only once all 3 kickoffs have actually entered Execute.
@@ -532,7 +532,7 @@ func TestRun_StreamingResultEmittedBeforeStreamEnds(t *testing.T) {
 		Session: session.NewSession("a", "k"),
 		AgentID: "a", Model: "test", MaxTurns: 2,
 	}
-	events, err := rt.Run(context.Background(), "go", nil)
+	events, err := rt.Run(context.Background(), "go", nil, nil, nil)
 	require.NoError(t, err)
 
 	// Track relative ordering of EventToolResult vs the tail EventTextDelta.
@@ -614,7 +614,7 @@ func TestRun_SubagentStreamingForwardsToParent(t *testing.T) {
 		task: tools.NewTaskTool(factory, parent.Depth, cfg.EligibleSubagents()),
 	}
 
-	events, err := parent.Run(context.Background(), "go", nil)
+	events, err := parent.Run(context.Background(), "go", nil, nil, nil)
 	require.NoError(t, err)
 
 	var subToolResultEvent *AgentEvent
@@ -711,7 +711,7 @@ func TestRun_StreamingPreservesSessionOrderForSlowTool(t *testing.T) {
 		close(exec.blockUntil)
 	}()
 
-	events, err := rt.Run(context.Background(), "search please", nil)
+	events, err := rt.Run(context.Background(), "search please", nil, nil, nil)
 	require.NoError(t, err)
 	for range events {
 	}
@@ -799,7 +799,7 @@ func TestRun_StreamingCortexAppendIsRaceClean(t *testing.T) {
 	// Trivial userMsg "ok" → ShouldRecall returns false → no Recall call on
 	// the zero Cortex. Combined with IngestSource="cron" (disables ingest),
 	// the zero Cortex is safe to leave dangling for the duration of the run.
-	events, err := rt.Run(context.Background(), "ok", nil)
+	events, err := rt.Run(context.Background(), "ok", nil, nil, nil)
 	require.NoError(t, err)
 
 	// Release tool blockers only after all 3 kickoffs have entered Execute
