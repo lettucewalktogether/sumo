@@ -820,6 +820,7 @@ func StartGateway(configPath, version string, opts ...Options) (*Result, error) 
 			// rewrites cfg in place) is observed by the re-auth handler.
 			return cfg
 		}),
+		Export:    gateway.NewExportHandlers(sessionStore),
 		LogBuffer: logBuf,
 	})
 

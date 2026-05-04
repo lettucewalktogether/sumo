@@ -24,6 +24,7 @@ type ServerOptions struct {
 	Skills         *SkillHandlers    // optional /settings/api/skills* handlers
 	Memory         *MemoryHandlers   // optional /settings/api/memory* handlers
 	MCP            *MCPHandlers      // optional /api/mcp* handlers (re-auth)
+	Export         *ExportHandlers   // optional /api/session/export handler
 	LogBuffer      *LogBuffer        // optional log buffer for /logs
 }
 
@@ -120,6 +121,10 @@ func (s *Server) routes() {
 
 	if s.opts.MCP != nil {
 		s.router.Post("/api/mcp/reauth/{id}", s.opts.MCP.Reauth)
+	}
+
+	if s.opts.Export != nil {
+		s.router.Get("/api/session/export", s.opts.Export.Export)
 	}
 
 	if s.opts.LogBuffer != nil {

@@ -986,6 +986,87 @@ html.light #header .logo {
    brighter background + accent2 border lifts the menu visually off
    the sidebar's bg-header, which would otherwise blend (both dark
    navy). The drop shadow gives a clear "this floats above" cue. */
+/* Export dialog — modal overlay anchored to the body, dismissible
+   on backdrop click or Escape. The card centres in the viewport
+   with a soft shadow; format buttons are a flex-wrapped grid so
+   the layout adapts to whatever buttons fit on a row. */
+.export-overlay {
+	position: fixed;
+	inset: 0;
+	background: rgba(0,0,0,0.55);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 100;
+}
+.export-card {
+	background: var(--bg-header);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 1.25rem 1.4rem;
+	min-width: 380px;
+	max-width: 480px;
+	box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+	color: var(--text);
+}
+.export-card h3 {
+	font-size: 1rem;
+	font-weight: 600;
+	color: var(--text-strong);
+	margin-bottom: 0.2rem;
+}
+.export-card .export-sub {
+	font-size: 0.78rem;
+	color: var(--text-muted);
+	margin-bottom: 1rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.export-formats {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 0.5rem;
+	margin-bottom: 1rem;
+}
+.export-fmt {
+	background: var(--bg-input);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	color: var(--text);
+	padding: 0.55rem 0.6rem;
+	font-size: 0.85rem;
+	font-family: inherit;
+	cursor: pointer;
+	transition: border-color 0.15s, color 0.15s;
+}
+.export-fmt:hover { border-color: var(--accent); color: var(--accent); }
+.export-toggle {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	font-size: 0.85rem;
+	color: var(--text-em);
+	cursor: pointer;
+	margin-bottom: 1rem;
+}
+.export-toggle input { cursor: pointer; }
+.export-actions {
+	display: flex;
+	justify-content: flex-end;
+}
+.export-cancel-btn {
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	color: var(--text);
+	padding: 0.4rem 0.9rem;
+	font-size: 0.85rem;
+	font-family: inherit;
+	cursor: pointer;
+}
+.export-cancel-btn:hover { border-color: var(--accent); color: var(--accent); }
+
 .row-menu {
 	position: absolute;
 	right: 0.4rem;
@@ -1231,6 +1312,11 @@ html.light #header .logo {
 		<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
 		<path d="M10 11v6M14 11v6"/>
 		<path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>
+	</symbol>
+	<symbol id="i-export" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+		<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+		<polyline points="7 10 12 5 17 10"/>
+		<line x1="12" y1="5" x2="12" y2="15"/>
 	</symbol>
 	<symbol id="i-pause" viewBox="0 0 24 24" fill="currentColor">
 		<rect x="7" y="5" width="3.5" height="14" rx="0.6"/>
@@ -2236,6 +2322,7 @@ html.light #header .logo {
 		}
 		menu.appendChild(mkItem('Rename', 'i-pencil', false, function(){ beginRenameRow(row, s); }));
 		menu.appendChild(mkItem(s.pinned ? 'Unpin' : 'Pin', 'i-pin', false, function(){ setPinned(s.key, !s.pinned); }));
+		menu.appendChild(mkItem('Export…', 'i-export', false, function(){ openExportDialog(s); }));
 		var sep = document.createElement('div');
 		sep.className = 'menu-sep';
 		menu.appendChild(sep);
@@ -2324,6 +2411,100 @@ html.light #header .logo {
 			params: { agentId: agentSelect.value, sessionKey: key, pinned: pinned },
 			id: 'session-pin-' + key
 		}));
+	}
+
+	// openExportDialog presents a small modal with format buttons and
+	// an "include tool calls" checkbox. Click a format → download
+	// starts via a hidden <a> with the right href; PDF opens the
+	// HTML export in a new window and triggers window.print() so the
+	// user gets the OS's native "Save as PDF" dialog without the
+	// gateway needing LaTeX or wkhtmltopdf installed.
+	function openExportDialog(s) {
+		// Close any prior dialog first.
+		var existing = document.getElementById('export-dialog');
+		if (existing) existing.remove();
+
+		var overlay = document.createElement('div');
+		overlay.id = 'export-dialog';
+		overlay.className = 'export-overlay';
+		overlay.innerHTML = '<div class="export-card" role="dialog" aria-modal="true" aria-labelledby="export-title">' +
+			'<h3 id="export-title">Export conversation</h3>' +
+			'<div class="export-sub">' + escHtml(sessionDisplayName(s)) + '</div>' +
+			'<div class="export-formats">' +
+				'<button class="export-fmt" data-fmt="md"   title="Markdown (.md)">Markdown</button>' +
+				'<button class="export-fmt" data-fmt="txt"  title="Plain text (.txt)">Text</button>' +
+				'<button class="export-fmt" data-fmt="html" title="HTML page (.html)">HTML</button>' +
+				'<button class="export-fmt" data-fmt="docx" title="Word document (.docx) — needs pandoc on PATH">Word</button>' +
+				'<button class="export-fmt" data-fmt="pdf"  title="Opens the HTML export in a new window and triggers Save as PDF">PDF</button>' +
+				'<button class="export-fmt" data-fmt="json" title="Raw session JSONL (lossless archive)">JSON</button>' +
+			'</div>' +
+			'<label class="export-toggle">' +
+				'<input type="checkbox" id="export-tools"> Include tool calls and results' +
+			'</label>' +
+			'<div class="export-actions">' +
+				'<button id="export-cancel" class="export-cancel-btn">Cancel</button>' +
+			'</div>' +
+		'</div>';
+		document.body.appendChild(overlay);
+
+		function close() { overlay.remove(); }
+		overlay.addEventListener('click', function(e) {
+			// Click on the overlay backdrop (outside the card) closes.
+			if (e.target === overlay) close();
+		});
+		document.getElementById('export-cancel').addEventListener('click', close);
+		document.addEventListener('keydown', function escClose(e) {
+			if (e.key === 'Escape') {
+				document.removeEventListener('keydown', escClose);
+				close();
+			}
+		});
+
+		var includeToolsEl = document.getElementById('export-tools');
+		Array.from(overlay.querySelectorAll('.export-fmt')).forEach(function(btn) {
+			btn.addEventListener('click', function() {
+				var fmt = btn.dataset.fmt;
+				var includeTools = includeToolsEl.checked;
+				doExport(s.key, fmt, includeTools);
+				close();
+			});
+		});
+	}
+
+	// doExport drives one export. For 'pdf' it opens the HTML export
+	// in a new window and triggers window.print() once loaded — the
+	// browser's print dialog has a built-in "Save as PDF" option, so
+	// no server-side LaTeX/wkhtmltopdf is required. For the rest, a
+	// hidden <a download> link kicks off the file download.
+	function doExport(key, fmt, includeTools) {
+		var base = '/api/session/export?agentId=' +
+			encodeURIComponent(agentSelect.value) +
+			'&sessionKey=' + encodeURIComponent(key) +
+			'&includeTools=' + (includeTools ? 'true' : 'false');
+		if (fmt === 'pdf') {
+			var url = base + '&format=html';
+			var w = window.open(url, '_blank');
+			if (!w) {
+				// Pop-up blocked — fall back to in-tab navigation
+				// with a hint that the user should print from there.
+				window.location.href = url;
+				return;
+			}
+			// Wait for the new window to load, then trigger print.
+			// Some browsers block the call when the window is still
+			// loading; the onload handler fires after the HTML is
+			// painted.
+			w.addEventListener('load', function() {
+				try { w.focus(); w.print(); } catch (_) {}
+			});
+			return;
+		}
+		var a = document.createElement('a');
+		a.href = base + '&format=' + encodeURIComponent(fmt);
+		a.download = ''; // server's Content-Disposition picks the name
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
 	}
 
 	function deleteSessionRow(key) {
