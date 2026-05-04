@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -62,6 +63,89 @@ func TestStorePersistence(t *testing.T) {
 	// Check file exists
 	path := filepath.Join(dir, "agent1", "test_peer.jsonl")
 	assert.FileExists(t, path)
+}
+
+// TestStoreSessionMeta covers the friendly-name + pinned sidecar
+// added for the chat sidebar — set, persist, list, clear, missing-
+// session error paths, plus the rename and delete sidecar-follow
+// behaviour.
+func TestStoreSessionMeta(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	// Need a session file to attach metadata to.
+	sess, err := store.Load("agent1", "k1")
+	require.NoError(t, err)
+	sess.Append(UserMessageEntry("hi"))
+
+	t.Run("default_state_is_zero", func(t *testing.T) {
+		infos, err := store.List("agent1")
+		require.NoError(t, err)
+		require.Len(t, infos, 1)
+		assert.Equal(t, "", infos[0].Name)
+		assert.False(t, infos[0].Pinned)
+	})
+
+	t.Run("set_name_and_list_returns_it", func(t *testing.T) {
+		require.NoError(t, store.SetName("agent1", "k1", "  Auth migration  "))
+		infos, err := store.List("agent1")
+		require.NoError(t, err)
+		require.Len(t, infos, 1)
+		assert.Equal(t, "Auth migration", infos[0].Name) // trimmed
+	})
+
+	t.Run("set_pinned_persists", func(t *testing.T) {
+		require.NoError(t, store.SetPinned("agent1", "k1", true))
+		infos, err := store.List("agent1")
+		require.NoError(t, err)
+		require.True(t, infos[0].Pinned)
+		// Sidecar must exist on disk.
+		assert.FileExists(t, filepath.Join(dir, "agent1", "k1.meta.json"))
+	})
+
+	t.Run("clear_both_removes_sidecar", func(t *testing.T) {
+		require.NoError(t, store.SetName("agent1", "k1", ""))
+		require.NoError(t, store.SetPinned("agent1", "k1", false))
+		// File should be gone.
+		_, err := os.Stat(filepath.Join(dir, "agent1", "k1.meta.json"))
+		assert.True(t, os.IsNotExist(err), "expected sidecar removed when both fields zero, got %v", err)
+		// And List should report defaults again.
+		infos, _ := store.List("agent1")
+		assert.Equal(t, "", infos[0].Name)
+		assert.False(t, infos[0].Pinned)
+	})
+
+	t.Run("missing_session_yields_error", func(t *testing.T) {
+		err := store.SetName("agent1", "ghost", "x")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "does not exist")
+		err = store.SetPinned("agent1", "ghost", true)
+		require.Error(t, err)
+	})
+
+	t.Run("rename_moves_sidecar", func(t *testing.T) {
+		require.NoError(t, store.SetName("agent1", "k1", "Friendly"))
+		require.NoError(t, store.SetPinned("agent1", "k1", true))
+		require.NoError(t, store.Rename("agent1", "k1", "k2"))
+		// Old sidecar gone, new sidecar exists.
+		_, err := os.Stat(filepath.Join(dir, "agent1", "k1.meta.json"))
+		assert.True(t, os.IsNotExist(err))
+		assert.FileExists(t, filepath.Join(dir, "agent1", "k2.meta.json"))
+		// And the metadata travelled with the rename.
+		infos, _ := store.List("agent1")
+		require.Len(t, infos, 1)
+		assert.Equal(t, "k2", infos[0].Key)
+		assert.Equal(t, "Friendly", infos[0].Name)
+		assert.True(t, infos[0].Pinned)
+	})
+
+	t.Run("delete_removes_sidecar", func(t *testing.T) {
+		require.NoError(t, store.Delete("agent1", "k2"))
+		_, err := os.Stat(filepath.Join(dir, "agent1", "k2.meta.json"))
+		assert.True(t, os.IsNotExist(err), "sidecar should be cleaned up on Delete")
+		_, err = os.Stat(filepath.Join(dir, "agent1", "k2.jsonl"))
+		assert.True(t, os.IsNotExist(err))
+	})
 }
 
 func TestToolCallEntries(t *testing.T) {

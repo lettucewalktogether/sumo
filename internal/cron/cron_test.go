@@ -35,6 +35,54 @@ func TestSchedulerAddAndRun(t *testing.T) {
 	assert.GreaterOrEqual(t, callCount.Load(), int32(1))
 }
 
+// TestSchedulerRunNow exercises the off-cycle "run now" path used by
+// the chat UI's Jobs tab. Critical behaviour: AgentFn fires
+// immediately (well before the next scheduled tick), and the
+// scheduler reports a clean error for an unknown job rather than
+// silently no-op'ing.
+func TestSchedulerRunNow(t *testing.T) {
+	t.Run("fires_off_cycle", func(t *testing.T) {
+		var calls atomic.Int32
+		s := NewScheduler()
+		require.NoError(t, s.Add(Job{
+			Name:     "manual-trigger",
+			Schedule: "1h", // wouldn't tick during the test window
+			Prompt:   "hello",
+			AgentFn: func(ctx context.Context, prompt string) (string, error) {
+				calls.Add(1)
+				return "ok", nil
+			},
+		}))
+		s.Start(context.Background())
+		defer s.Stop()
+		require.NoError(t, s.RunNow("manual-trigger"))
+		// Allow the goroutine to actually run.
+		require.Eventually(t, func() bool { return calls.Load() >= 1 },
+			500*time.Millisecond, 10*time.Millisecond,
+			"AgentFn should have been called once via RunNow")
+	})
+
+	t.Run("unknown_job_errors", func(t *testing.T) {
+		s := NewScheduler()
+		s.Start(context.Background())
+		defer s.Stop()
+		err := s.RunNow("ghost")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("scheduler_not_started_errors", func(t *testing.T) {
+		s := NewScheduler()
+		require.NoError(t, s.Add(Job{
+			Name: "x", Schedule: "1h", Prompt: "p",
+			AgentFn: func(ctx context.Context, prompt string) (string, error) { return "", nil },
+		}))
+		err := s.RunNow("x")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not started")
+	})
+}
+
 func TestSchedulerInvalidSchedule(t *testing.T) {
 	s := NewScheduler()
 	err := s.Add(Job{

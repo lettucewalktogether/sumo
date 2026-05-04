@@ -255,6 +255,10 @@ func (h *WebSocketHandler) dispatch(conn *websocket.Conn, req JSONRPCRequest) {
 		h.handleSessionList(conn, req)
 	case "session.new":
 		h.handleSessionNew(conn, req)
+	case "session.rename":
+		h.handleSessionRename(conn, req)
+	case "session.setPinned":
+		h.handleSessionSetPinned(conn, req)
 	case "session.switch":
 		h.handleSessionSwitch(conn, req)
 	case "session.history":
@@ -271,6 +275,8 @@ func (h *WebSocketHandler) dispatch(conn *websocket.Conn, req JSONRPCRequest) {
 		h.handleJobsRemove(conn, req)
 	case "jobs.update":
 		h.handleJobsUpdate(conn, req)
+	case "jobs.runNow":
+		h.handleJobsRunNow(conn, req)
 	case "jobs.add":
 		h.handleJobsAdd(conn, req)
 	default:
@@ -898,6 +904,8 @@ func (h *WebSocketHandler) handleSessionList(conn *websocket.Conn, req JSONRPCRe
 	for _, s := range sessions {
 		result = append(result, map[string]any{
 			"key":          s.Key,
+			"name":         s.Name,
+			"pinned":       s.Pinned,
 			"entryCount":   s.EntryCount,
 			"createdAt":    s.CreatedAt.Unix(),
 			"lastActivity": s.LastActivity.Unix(),
@@ -910,6 +918,69 @@ func (h *WebSocketHandler) handleSessionList(conn *websocket.Conn, req JSONRPCRe
 		Result:  map[string]any{"sessions": result},
 		ID:      req.ID,
 	})
+}
+
+// session.rename sets the friendly display name for a session. Empty
+// name clears the name (UI falls back to the bare key). The underlying
+// session key is unchanged — chat reconnections, ws_default fallback,
+// and the session.* RPC contract all keep working.
+type sessionRenameParams struct {
+	AgentID    string `json:"agentId"`
+	SessionKey string `json:"sessionKey"`
+	Name       string `json:"name"`
+}
+
+func (h *WebSocketHandler) handleSessionRename(conn *websocket.Conn, req JSONRPCRequest) {
+	var params sessionRenameParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		writeJSON(conn, JSONRPCResponse{JSONRPC: "2.0", Error: map[string]any{"code": -32602, "message": "Invalid params"}, ID: req.ID})
+		return
+	}
+	if params.AgentID == "" {
+		params.AgentID = "default"
+	}
+	if params.SessionKey == "" {
+		writeJSON(conn, JSONRPCResponse{JSONRPC: "2.0", Error: map[string]any{"code": -32602, "message": "sessionKey required"}, ID: req.ID})
+		return
+	}
+	// Cap at a sensible length so a runaway client can't flood the
+	// session metadata file with megabytes of "name".
+	const maxSessionNameLen = 200
+	if len(params.Name) > maxSessionNameLen {
+		params.Name = params.Name[:maxSessionNameLen]
+	}
+	if err := h.sessionStore.SetName(params.AgentID, params.SessionKey, params.Name); err != nil {
+		writeJSON(conn, JSONRPCResponse{JSONRPC: "2.0", Error: map[string]any{"code": -32603, "message": "rename failed: " + err.Error()}, ID: req.ID})
+		return
+	}
+	writeJSON(conn, JSONRPCResponse{JSONRPC: "2.0", Result: map[string]any{"ok": true}, ID: req.ID})
+}
+
+// session.setPinned flips the pinned flag for a session.
+type sessionSetPinnedParams struct {
+	AgentID    string `json:"agentId"`
+	SessionKey string `json:"sessionKey"`
+	Pinned     bool   `json:"pinned"`
+}
+
+func (h *WebSocketHandler) handleSessionSetPinned(conn *websocket.Conn, req JSONRPCRequest) {
+	var params sessionSetPinnedParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		writeJSON(conn, JSONRPCResponse{JSONRPC: "2.0", Error: map[string]any{"code": -32602, "message": "Invalid params"}, ID: req.ID})
+		return
+	}
+	if params.AgentID == "" {
+		params.AgentID = "default"
+	}
+	if params.SessionKey == "" {
+		writeJSON(conn, JSONRPCResponse{JSONRPC: "2.0", Error: map[string]any{"code": -32602, "message": "sessionKey required"}, ID: req.ID})
+		return
+	}
+	if err := h.sessionStore.SetPinned(params.AgentID, params.SessionKey, params.Pinned); err != nil {
+		writeJSON(conn, JSONRPCResponse{JSONRPC: "2.0", Error: map[string]any{"code": -32603, "message": "setPinned failed: " + err.Error()}, ID: req.ID})
+		return
+	}
+	writeJSON(conn, JSONRPCResponse{JSONRPC: "2.0", Result: map[string]any{"ok": true}, ID: req.ID})
 }
 
 type sessionNewParams struct {
@@ -1184,6 +1255,31 @@ func (h *WebSocketHandler) handleJobsList(conn *websocket.Conn, req JSONRPCReque
 		Result:  map[string]any{"jobs": jobs},
 		ID:      req.ID,
 	})
+}
+
+// handleJobsRunNow fires a job once off-cycle. Used by the chat UI's
+// "Run now" / "Retry" buttons in the Jobs sidebar tab. The execution
+// is asynchronous from the WebSocket perspective: a successful return
+// just means the goroutine was spawned; per-tick logging and any
+// configured OutputFn carry the real result.
+func (h *WebSocketHandler) handleJobsRunNow(conn *websocket.Conn, req JSONRPCRequest) {
+	h.mu.RLock()
+	js := h.jobScheduler
+	h.mu.RUnlock()
+	if js == nil {
+		writeJSON(conn, JSONRPCResponse{JSONRPC: "2.0", Error: map[string]any{"code": -32603, "message": "Job scheduler not available"}, ID: req.ID})
+		return
+	}
+	var params jobNameParams
+	if err := json.Unmarshal(req.Params, &params); err != nil || params.Name == "" {
+		writeJSON(conn, JSONRPCResponse{JSONRPC: "2.0", Error: map[string]any{"code": -32602, "message": "Invalid params: name required"}, ID: req.ID})
+		return
+	}
+	if err := js.RunNowJob(params.Name); err != nil {
+		writeJSON(conn, JSONRPCResponse{JSONRPC: "2.0", Error: map[string]any{"code": -32603, "message": err.Error()}, ID: req.ID})
+		return
+	}
+	writeJSON(conn, JSONRPCResponse{JSONRPC: "2.0", Result: map[string]any{"ok": true}, ID: req.ID})
 }
 
 func (h *WebSocketHandler) handleJobsPause(conn *websocket.Conn, req JSONRPCRequest) {

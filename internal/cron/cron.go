@@ -275,6 +275,56 @@ func (s *Scheduler) runJob(ctx context.Context, job Job) {
 	}
 }
 
+// RunNow fires the named job once, off-cycle, in a background
+// goroutine. Used by the chat UI's "Run now" / "Retry" buttons —
+// doesn't change the schedule, doesn't reset the next-tick clock,
+// just kicks AgentFn one extra time.
+//
+// Returns an error if the job isn't registered. The execution
+// itself is fire-and-forget: failures are logged via slog (matching
+// the periodic-tick path) and reported through OutputFn if one is
+// configured, but not surfaced to the caller — running-jobs are
+// inherently asynchronous from the perspective of whoever pressed
+// the button.
+func (s *Scheduler) RunNow(name string) error {
+	s.mu.Lock()
+	var job Job
+	found := false
+	for _, j := range s.jobs {
+		if j.Name == name {
+			job = j
+			found = true
+			break
+		}
+	}
+	ctx := s.ctx
+	s.mu.Unlock()
+
+	if !found {
+		return fmt.Errorf("cron job %q not found", name)
+	}
+	if ctx == nil {
+		return fmt.Errorf("cron scheduler not started")
+	}
+
+	go func() {
+		slog.Info("cron job running (off-cycle)", "name", job.Name, "trigger", "run_now")
+		response, err := job.AgentFn(ctx, job.Prompt)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			slog.Error("cron job failed (off-cycle)", "name", job.Name, "error", err)
+			return
+		}
+		slog.Info("cron job completed (off-cycle)", "name", job.Name, "response_length", len(response))
+		if job.OutputFn != nil {
+			job.OutputFn(job.Name, response)
+		}
+	}()
+	return nil
+}
+
 // Jobs returns the list of configured jobs.
 func (s *Scheduler) Jobs() []Job {
 	s.mu.Lock()
