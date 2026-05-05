@@ -121,6 +121,13 @@ func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
 		"Lao",
 		"Javanese",
 		"Sundanese",
+		// v0.1.8 — thinking indicator + translate offline tooltip.
+		"showThinking",
+		"hideThinking",
+		"msg-thinking",
+		"thinking-dots",
+		"Thinking…",
+		"fully offline if your active agent is a local model",
 	} {
 		assert.Contains(t, html, want,
 			"expected per-response toolbar / sources hook %q in served HTML", want)

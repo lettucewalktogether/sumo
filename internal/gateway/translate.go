@@ -82,13 +82,18 @@ type TranslateHandlers struct {
 
 // translateMaxBodyChars caps the input we forward to the LLM so a
 // malicious or accidental large paste can't run up unbounded provider
-// cost. 16 KiB is generous for a single chat response.
-const translateMaxBodyChars = 16000
+// cost. 12 KiB is generous for a single chat response while keeping
+// total wall-clock bounded on a local model. Anything larger is
+// truncated (the user sees the truncation marker server-side).
+const translateMaxBodyChars = 12000
 
 // translateTimeout caps how long a single translation may run end to
-// end. Well above the typical 1–5 s for a 1-2 KB response and below
-// the indefinite hang a stuck provider could otherwise produce.
-const translateTimeout = 60 * time.Second
+// end. The previous 60 s was tuned for cloud models — when the
+// active agent is a local model (Ollama / SEA-LION 27B), translating
+// a 10 KB response can easily run 90–180 s on consumer hardware.
+// 5 minutes gives local models room while still bailing on a
+// genuinely stuck provider rather than hanging the chat indefinitely.
+const translateTimeout = 5 * time.Minute
 
 // translateSystemFmt is the system prompt for translation calls. The
 // %s placeholder is filled with the target language name twice — once

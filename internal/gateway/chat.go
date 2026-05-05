@@ -434,6 +434,39 @@ html.light #header .logo {
 .msg-pill .pill-label { white-space: nowrap; }
 .msg-pill-confirm { background: var(--bg-input); border-color: var(--accent); color: var(--accent); }
 
+/* Thinking indicator — minimal pseudo-bubble shown the moment the
+   user hits Send so they have visual confirmation the request is
+   in flight, before the first token arrives. Replaced by the
+   actual streaming bubble on first delta. */
+.msg-thinking {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.55rem;
+	padding: 0.55rem 0.95rem;
+	font-size: 0.85rem;
+	color: var(--text-muted);
+}
+.msg-thinking .thinking-label { font-style: italic; }
+.thinking-dots {
+	display: inline-flex;
+	gap: 0.25rem;
+	align-items: center;
+}
+.thinking-dots span {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%%;
+	background: var(--accent);
+	opacity: 0.35;
+	animation: thinking-pulse 1.2s infinite ease-in-out;
+}
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes thinking-pulse {
+	0%%, 80%%, 100%% { opacity: 0.25; transform: scale(0.85); }
+	40%%             { opacity: 1.0;  transform: scale(1.15); }
+}
+
 .msg-pill-wrap { position: relative; display: inline-flex; }
 .msg-dropdown {
 	display: none;
@@ -2750,6 +2783,13 @@ html.light #header .logo {
 		btn.className = 'msg-pill';
 		btn.setAttribute('aria-haspopup', 'true');
 		btn.setAttribute('aria-expanded', 'false');
+		// Tooltip explains the network requirement — translation
+		// goes through whatever LLM the active agent is configured
+		// with. Local agent → fully offline. Cloud agent → needs
+		// internet (whatever that provider needs).
+		btn.title = 'Translate this response. Uses your active agent’s model — ' +
+			'fully offline if your active agent is a local model (e.g. SEA-LION via Ollama), ' +
+			'requires internet if it’s a cloud model (Anthropic / OpenAI / Gemini / SEA-LION cloud).';
 		btn.innerHTML =
 			'<svg width="14" height="14" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
 			'<path d="M3 5h12M9 3v2m1 9.5A18 18 0 0 1 6.4 9m6.1 9h7M11 21l5-10 5 10M12.7 5C11.8 10.8 8.1 15.6 3 18.1"></path>' +
@@ -3093,9 +3133,38 @@ html.light #header .logo {
 		messagesEl.appendChild(empty);
 		currentAssistant = null;
 		toolEls = {};
+		thinkingEl = null;
 		// Reset the per-bubble export counter — the next assistant
 		// message rendered into a fresh session is "message 0".
 		assistantMsgCounter = 0;
+	}
+
+	// Thinking indicator — a small pseudo-bubble that shows the moment
+	// the user hits Send so they have visual confirmation the request
+	// is in flight. Removed when the first text_delta or tool_call
+	// arrives, OR on done / aborted / error if it somehow survived
+	// (e.g. the model emitted only a tool call with no preceding
+	// text). Mirrors the pattern from the kc-planning-assistant where
+	// "🔵 Searching IB documents..." appears immediately on send.
+	var thinkingEl = null;
+	function showThinking() {
+		if (thinkingEl) return;
+		messagesEl.classList.add('has-messages');
+		var el = document.createElement('div');
+		el.className = 'msg assistant msg-thinking';
+		el.innerHTML =
+			'<span class="thinking-dots" aria-hidden="true">' +
+				'<span></span><span></span><span></span>' +
+			'</span>' +
+			'<span class="thinking-label">Thinking…</span>';
+		messagesEl.appendChild(el);
+		thinkingEl = el;
+		scrollToBottom();
+	}
+	function hideThinking() {
+		if (!thinkingEl) return;
+		thinkingEl.remove();
+		thinkingEl = null;
 	}
 
 	var ws = null;
@@ -3451,12 +3520,14 @@ html.light #header .logo {
 
 				switch (r.type) {
 				case 'text_delta':
+					hideThinking();
 					if (!currentAssistant) {
 						currentAssistant = addAssistantMsg('');
 					}
 					appendToAssistant(r.text);
 					break;
 				case 'tool_call_start':
+					hideThinking();
 					if (currentAssistant) {
 						finalizeAssistant();
 						currentAssistant = null;
@@ -3467,6 +3538,7 @@ html.light #header .logo {
 					updateToolResult(r.tool, r.id, r.input, r.output, r.error, r.images, r.auth_required);
 					break;
 				case 'done':
+					hideThinking();
 					if (currentAssistant) {
 						finalizeAssistant();
 					}
@@ -3483,6 +3555,7 @@ html.light #header .logo {
 				updateTokenChip(r.usage);
 					break;
 				case 'aborted':
+					hideThinking();
 					if (currentAssistant) {
 						finalizeAssistant();
 					}
@@ -3491,6 +3564,7 @@ html.light #header .logo {
 					updateSendBtn();
 					break;
 				case 'error':
+					hideThinking();
 					addError(r.message);
 					currentAssistant = null;
 					sending = false;
@@ -3949,6 +4023,7 @@ html.light #header .logo {
 		attachments = [];
 
 		addUserMsg(text, sentAtts);
+		showThinking();
 		sending = true;
 		updateSendBtn();
 		msgId++;
