@@ -137,3 +137,23 @@ func TestTranslateLanguagesByCode_MatchesOrdered(t *testing.T) {
 		assert.Equal(t, l.Name, got)
 	}
 }
+
+// TestTranslateAcceptsSEALanguages locks in the v0.1.7 expansion so
+// the SEA-LION-aligned languages (Thai, Indonesian, Malay, Tamil,
+// Khmer, Lao, Javanese, Sundanese) can never be silently removed
+// from the allowlist. Each one also still has to round-trip through
+// the actual handler — a stub provider returns a canned response so
+// we don't need an LLM. Burmese, Vietnamese, Tagalog were already
+// supported and are sanity-checked here too.
+func TestTranslateAcceptsSEALanguages(t *testing.T) {
+	h, _ := translateTestSetup(t, "ok")
+	for _, code := range []string{
+		"th", "id", "ms", "ta", "km", "lo", "jv", "su",
+		"vi", "my", "tl",
+	} {
+		body := `{"agentId":"default","text":"hi","lang":"` + code + `"}`
+		rec := translatePost(t, h, body)
+		assert.Equal(t, http.StatusOK, rec.Code,
+			"lang %q should be accepted, got %s", code, rec.Body.String())
+	}
+}

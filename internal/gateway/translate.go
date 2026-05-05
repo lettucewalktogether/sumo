@@ -21,32 +21,47 @@ type TranslateLanguage struct {
 }
 
 // translateLanguagesOrdered is the language list shown in the chat's
-// per-response Translate dropdown. Mirrors the kc-planning-assistant
-// list so users carrying conventions across the two surfaces see the
-// same set; the order matches that app's dropdown so muscle memory
-// works.
+// per-response Translate dropdown. Built around two intersecting
+// goals: (a) mirror the kc-planning-assistant set so users carrying
+// conventions across the two surfaces see the same set, and (b)
+// cover every language SEA-LION ships native support for so a user
+// who runs a SEA-LION model can actually translate into it. The
+// SEA block (Thai, Indonesian, Malay, Tamil, Khmer, Lao, Javanese,
+// Sundanese) is grouped together near the other Asian languages.
 var translateLanguagesOrdered = []TranslateLanguage{
 	{"en", "English"},
 	{"es", "Spanish"},
-	{"vi", "Vietnamese"},
-	{"so", "Somali"},
-	{"ar", "Arabic"},
-	{"sw", "Swahili"},
 	{"fr", "French"},
-	{"ne", "Nepali"},
-	{"my", "Burmese"},
-	{"am", "Amharic"},
-	{"zh", "Chinese (Simplified)"},
-	{"zh-TW", "Chinese (Traditional)"},
-	{"ko", "Korean"},
-	{"ru", "Russian"},
-	{"uk", "Ukrainian"},
 	{"pt", "Portuguese"},
 	{"de", "German"},
+	{"ru", "Russian"},
+	{"uk", "Ukrainian"},
+	// Southeast Asian — natively supported by SEA-LION
+	{"vi", "Vietnamese"},
+	{"th", "Thai"},
+	{"id", "Indonesian (Bahasa)"},
+	{"ms", "Malay"},
+	{"tl", "Tagalog (Filipino)"},
+	{"my", "Burmese"},
+	{"km", "Khmer"},
+	{"lo", "Lao"},
+	{"ta", "Tamil"},
+	{"jv", "Javanese"},
+	{"su", "Sundanese"},
+	// East Asian
+	{"zh", "Chinese (Simplified)"},
+	{"zh-TW", "Chinese (Traditional)"},
+	{"ja", "Japanese"},
+	{"ko", "Korean"},
+	// South Asian
 	{"hi", "Hindi"},
 	{"ur", "Urdu"},
-	{"tl", "Tagalog"},
-	{"ja", "Japanese"},
+	{"ne", "Nepali"},
+	// MENA / Africa
+	{"ar", "Arabic"},
+	{"sw", "Swahili"},
+	{"so", "Somali"},
+	{"am", "Amharic"},
 }
 
 // translateLanguagesByCode is the validation map. Built once at init

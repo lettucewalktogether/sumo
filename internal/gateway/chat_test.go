@@ -110,6 +110,17 @@ func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
 		"Save as Markdown",
 		"translateLanguages",
 		"Sources Referenced",
+		// v0.1.7 — SEA languages added to the Translate dropdown so
+		// users running a SEA-LION model can actually translate
+		// into the languages SEA-LION specialises in.
+		"Indonesian (Bahasa)",
+		"Malay",
+		"Thai",
+		"Tamil",
+		"Khmer",
+		"Lao",
+		"Javanese",
+		"Sundanese",
 	} {
 		assert.Contains(t, html, want,
 			"expected per-response toolbar / sources hook %q in served HTML", want)

@@ -755,9 +755,22 @@ html.dark .error-state { background: #450a0a; }
 	}
 
 	// === Models tab — talks directly to bundled Ollama via providers.local.base_url ===
+	//
+	// SEA-LION entries reference the official aisingapore Ollama tags
+	// (https://ollama.com/aisingapore/...). Once pulled, agents
+	// reference them as local/aisingapore/Llama-SEA-LION-v3.5-8B-R
+	// or similar. Felix splits provider/model on the FIRST slash so
+	// the multi-segment tag is preserved verbatim and routed to the
+	// bundled Ollama supervisor''s OpenAI-compatible endpoint.
 	var CURATED_MODELS = [
 		{name: 'gemma4:latest',     label: 'Gemma 4 (multimodal)',     size: '~9.6 GB', note: 'recommended — vision + general agent'},
 		{name: 'qwen3.5:9b',        label: 'Qwen 3.5 9B',              size: '~5.0 GB', note: 'lighter, text-only'},
+		{name: 'aisingapore/Llama-SEA-LION-v3.5-8B-R',
+			label: 'SEA-LION 8B (Llama, reasoning)',                size: '~4.9 GB',
+			note: 'Southeast Asian languages — Bahasa, Thai, Vietnamese, Tamil, Filipino, Khmer, Lao, Burmese'},
+		{name: 'aisingapore/Gemma-SEA-LION-v4-27B-IT',
+			label: 'SEA-LION 27B (Gemma, instruct)',                size: '~18 GB',
+			note: 'higher quality SEA — needs ~16 GB RAM, runs on a laptop with M-series'},
 		{name: 'nomic-embed-text',  label: 'Nomic Embed Text',         size: '~274 MB', note: 'embeddings — recommended for memory'},
 		{name: 'mxbai-embed-large', label: 'MixedBread Embed Large',   size: '~670 MB', note: 'embeddings — higher quality'}
 	];
@@ -1777,12 +1790,14 @@ html.dark .error-state { background: #450a0a; }
 				var modelGroup = makeField(row2, 'Model', 'text', a.model || '', function(v) { cfg.agents.list[idx].model = v; });
 				setFieldPlaceholder(modelGroup, 'anthropic/claude-sonnet-4-5');
 				addFieldHelp(modelGroup,
-					'<code>provider/model</code>. The provider must be configured in the Providers tab. Examples: ' +
+					'<code>provider/model</code>. The provider must be configured in the Providers tab. ' +
+					'The split is on the FIRST slash, so multi-segment tags work. Examples: ' +
 					'<code>anthropic/claude-sonnet-4-5</code>, ' +
 					'<code>openai/gpt-4o</code>, ' +
 					'<code>gemini/gemini-2.0-flash</code>, ' +
-					'<code>local/gemma3:4b</code>, ' +
-					'<code>ollama/qwen3:8b</code>.');
+					'<code>local/gemma4:latest</code>, ' +
+					'<code>local/aisingapore/Llama-SEA-LION-v3.5-8B-R</code> (SEA languages, locally), ' +
+					'<code>sealion/aisingapore/Gemma-SEA-LION-v4-27B-IT</code> (SEA languages, cloud API).');
 
 				var maxTurnsGroup = makeField(row2, 'Max Turns', 'number', a.maxTurns || 0, function(v) { cfg.agents.list[idx].maxTurns = v; });
 				setFieldPlaceholder(maxTurnsGroup, '25');

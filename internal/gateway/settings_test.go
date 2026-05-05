@@ -27,6 +27,30 @@ import (
 // errors containing JSON-significant characters (quotes, backslashes,
 // newlines) and asserts each response is parseable JSON whose error
 // field round-trips back to the underlying message.
+// TestSettingsPage_ListsSEALionInModelsTab locks in v0.1.7 — both
+// SEA-LION Ollama tags must appear in the Models tab so a user can
+// click "Download" without editing felix.json5 by hand. The 8B
+// reasoning variant fits a typical laptop; the 27B instruct variant
+// fits an M-series Mac with ≥16 GB unified memory.
+func TestSettingsPage_ListsSEALionInModelsTab(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.SetPath(t.TempDir() + "/felix.json5")
+	handlers := NewSettingsHandlers(cfg, &tools.Registry{}, nil, nil)
+
+	req := httptest.NewRequest("GET", "/settings", nil)
+	rec := httptest.NewRecorder()
+	handlers.Page(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+
+	assert.Contains(t, body, "aisingapore/Llama-SEA-LION-v3.5-8B-R",
+		"8B SEA-LION reasoning model must appear in the Models tab catalog")
+	assert.Contains(t, body, "aisingapore/Gemma-SEA-LION-v4-27B-IT",
+		"27B SEA-LION instruct model must appear in the Models tab catalog")
+	assert.Contains(t, body, "SEA-LION 8B")
+	assert.Contains(t, body, "SEA-LION 27B")
+}
+
 func TestSaveConfig_ErrorResponsesAreValidJSON(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.SetPath(t.TempDir() + "/felix.json5")

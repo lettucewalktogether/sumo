@@ -2621,30 +2621,46 @@ html.light #header .logo {
 		document.body.removeChild(a);
 	}
 
-	// translateLanguages mirrors the kc-planning-assistant dropdown
-	// (server has the same list at /api/translate's allowlist).
+	// translateLanguages mirrors the server's translateLanguagesOrdered
+	// allowlist (internal/gateway/translate.go). Keep the two in sync —
+	// adding a language here without adding it server-side gives the
+	// user a dropdown entry that returns 400. Grouped to match the
+	// server: European, Southeast Asian (SEA-LION-supported), East
+	// Asian, South Asian, MENA / Africa.
 	var translateLanguages = [
 		{ code: 'en',    name: 'English' },
 		{ code: 'es',    name: 'Spanish' },
-		{ code: 'vi',    name: 'Vietnamese' },
-		{ code: 'so',    name: 'Somali' },
-		{ code: 'ar',    name: 'Arabic' },
-		{ code: 'sw',    name: 'Swahili' },
 		{ code: 'fr',    name: 'French' },
-		{ code: 'ne',    name: 'Nepali' },
-		{ code: 'my',    name: 'Burmese' },
-		{ code: 'am',    name: 'Amharic' },
-		{ code: 'zh',    name: 'Chinese (Simplified)' },
-		{ code: 'zh-TW', name: 'Chinese (Traditional)' },
-		{ code: 'ko',    name: 'Korean' },
-		{ code: 'ru',    name: 'Russian' },
-		{ code: 'uk',    name: 'Ukrainian' },
 		{ code: 'pt',    name: 'Portuguese' },
 		{ code: 'de',    name: 'German' },
+		{ code: 'ru',    name: 'Russian' },
+		{ code: 'uk',    name: 'Ukrainian' },
+		// Southeast Asian — SEA-LION strengths
+		{ code: 'vi',    name: 'Vietnamese' },
+		{ code: 'th',    name: 'Thai' },
+		{ code: 'id',    name: 'Indonesian (Bahasa)' },
+		{ code: 'ms',    name: 'Malay' },
+		{ code: 'tl',    name: 'Tagalog (Filipino)' },
+		{ code: 'my',    name: 'Burmese' },
+		{ code: 'km',    name: 'Khmer' },
+		{ code: 'lo',    name: 'Lao' },
+		{ code: 'ta',    name: 'Tamil' },
+		{ code: 'jv',    name: 'Javanese' },
+		{ code: 'su',    name: 'Sundanese' },
+		// East Asian
+		{ code: 'zh',    name: 'Chinese (Simplified)' },
+		{ code: 'zh-TW', name: 'Chinese (Traditional)' },
+		{ code: 'ja',    name: 'Japanese' },
+		{ code: 'ko',    name: 'Korean' },
+		// South Asian
 		{ code: 'hi',    name: 'Hindi' },
 		{ code: 'ur',    name: 'Urdu' },
-		{ code: 'tl',    name: 'Tagalog' },
-		{ code: 'ja',    name: 'Japanese' }
+		{ code: 'ne',    name: 'Nepali' },
+		// MENA / Africa
+		{ code: 'ar',    name: 'Arabic' },
+		{ code: 'sw',    name: 'Swahili' },
+		{ code: 'so',    name: 'Somali' },
+		{ code: 'am',    name: 'Amharic' }
 	];
 
 	// buildAssistantToolbar constructs the Copy / Download ▾ /
