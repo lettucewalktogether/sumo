@@ -371,14 +371,17 @@ html.light #header .logo {
 #messages {
 	flex: 1;
 	overflow-y: auto;
+	overflow-x: hidden;
 	padding: 1rem 1.5rem;
 	display: flex;
 	flex-direction: column;
 	gap: 1rem;
+	min-width: 0;
 }
 .msg {
 	position: relative;
 	max-width: 85%%;
+	min-width: 0;
 	padding: 0.75rem 1rem;
 	border-radius: 12px;
 	line-height: 1.5;
@@ -394,12 +397,14 @@ html.light #header .logo {
 	display: flex;
 	flex-direction: column;
 	max-width: 85%%;
+	min-width: 0;
 	align-self: flex-start;
 	gap: 0.5rem;
 }
 .assistant-wrap .msg.assistant {
 	align-self: stretch;
 	max-width: none;
+	min-width: 0;
 }
 /* Per-response action toolbar — Copy / Download ▾ / Translate ▾ pills
    sit at the bottom of every finalised assistant bubble. Hidden
@@ -510,6 +515,33 @@ html.light #header .logo {
 	font-size: 0.9rem;
 	line-height: 1.5;
 	color: var(--text);
+	/* Same flexbox containment + overflow guarantees as the
+	   primary bubble — long unbreakable content (a URL, an
+	   inline-code span, a wide table cell) scrolls its own
+	   element rather than blowing out the chat layout. */
+	min-width: 0;
+	max-width: 100%%;
+	overflow-wrap: anywhere;
+}
+.msg-translation pre {
+	background: var(--bg-code);
+	padding: 0.6rem 0.8rem;
+	border-radius: 6px;
+	overflow-x: auto;
+	max-width: 100%%;
+	margin: 0.5em 0;
+	border: 1px solid rgba(180, 130, 40, 0.35);
+}
+.msg-translation pre code {
+	white-space: pre;
+	overflow-wrap: normal;
+	word-break: normal;
+}
+.msg-translation table {
+	display: block;
+	max-width: 100%%;
+	overflow-x: auto;
+	border-collapse: collapse;
 }
 .msg-translation-header {
 	display: flex;
@@ -579,6 +611,17 @@ html.light #header .logo {
 	border-bottom-left-radius: 4px;
 	border: 1px solid var(--border);
 }
+/* The .content div is the markdown render target. min-width:0 +
+   max-width:100%% lets long unbreakable inline content (a giant
+   URL, a long inline code span) shrink with the bubble instead of
+   forcing it to grow. Combined with overflow-x:auto on the inner
+   <pre>, code blocks scroll horizontally inside themselves rather
+   than blowing out the chat layout. */
+.msg.assistant .content {
+	min-width: 0;
+	max-width: 100%%;
+	overflow-wrap: anywhere;
+}
 .msg.assistant .content p { margin-bottom: 0.5em; }
 .msg.assistant .content p:last-child { margin-bottom: 0; }
 .msg.assistant .content code {
@@ -593,6 +636,7 @@ html.light #header .logo {
 	padding: 0.75rem;
 	border-radius: 6px;
 	overflow-x: auto;
+	max-width: 100%%;
 	margin: 0.5em 0;
 	border: 1px solid var(--border);
 	transition: background 0.3s, border-color 0.3s;
@@ -601,6 +645,13 @@ html.light #header .logo {
 	background: none;
 	padding: 0;
 	font-size: 0.85em;
+	/* Code stays on one line per source line — overflow-wrap from
+	   the parent .content would otherwise force-wrap mid-token,
+	   which destroys readability. The parent <pre>'s overflow-x:
+	   auto handles the horizontal scroll. */
+	white-space: pre;
+	overflow-wrap: normal;
+	word-break: normal;
 }
 .msg.assistant .content a { color: var(--accent2); }
 .msg.assistant .content strong { color: var(--text-strong); }

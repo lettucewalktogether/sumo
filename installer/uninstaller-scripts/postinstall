@@ -1,0 +1,108 @@
+#!/bin/bash
+# ---------------------------------------------------------------------------
+# Felix uninstaller — runs as the "postinstall" of a payload-free .pkg.
+# macOS Installer.app prompts the user for an admin password before this
+# script runs, so we already have root. No `sudo` calls inside.
+#
+# Removes everything the install-side postinstall placed:
+#   /Applications/Felix.app          — menubar app + bundled ollama + felix CLI
+#   /usr/local/bin/felix             — symlink to the in-bundle CLI
+#   /usr/local/share/felix           — bundled skills (read-only reference)
+#   pkgutil receipt for com.felix.app
+#
+# Deliberately does NOT touch ~/.felix — the user's data lives there
+# (config, sessions, memory, pulled Ollama models). A wipe of those is
+# a separate, explicit action documented in the README so an
+# accidental double-click can't trash 16+ GB of pulled local models.
+#
+# Exits 0 on success, non-zero only on a genuinely fatal step. Each
+# removal is independent — we keep going even if one piece is already
+# gone (e.g. the user partially uninstalled by hand).
+# ---------------------------------------------------------------------------
+set -u
+
+LOG_FILE="/var/log/felix-uninstall.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+echo "[felix-uninstall] $(date -u +%Y-%m-%dT%H:%M:%SZ) — starting"
+
+# -------- Stop any running Felix.app first -------------------------------
+# A running menubar app holds open file descriptors against the bundle;
+# pkill ensures we can rm -rf /Applications/Felix.app cleanly. No-op
+# when nothing is running. We send SIGTERM (default) so the gateway
+# subprocess gets a chance to flush state, then wait briefly.
+if pgrep -x "felix-app" >/dev/null 2>&1; then
+  echo "[felix-uninstall] stopping felix-app (menubar)"
+  pkill -x "felix-app" || true
+fi
+if pgrep -x "felix" >/dev/null 2>&1; then
+  echo "[felix-uninstall] stopping felix (gateway)"
+  pkill -x "felix" || true
+fi
+# Bundled ollama runs in its own process group; stop it too so
+# /Applications/Felix.app/Contents/Resources/bin/ollama isn't busy.
+if pgrep -f "Felix.app/Contents/Resources/bin/ollama" >/dev/null 2>&1; then
+  echo "[felix-uninstall] stopping bundled ollama"
+  pkill -f "Felix.app/Contents/Resources/bin/ollama" || true
+fi
+# Brief grace period for SIGTERM to take effect.
+sleep 2
+# Force-kill any stragglers — at uninstall time we're not waiting around.
+pkill -9 -x "felix-app" 2>/dev/null || true
+pkill -9 -x "felix"     2>/dev/null || true
+pkill -9 -f "Felix.app/Contents/Resources/bin/ollama" 2>/dev/null || true
+
+# -------- Remove the app bundle ------------------------------------------
+if [ -d "/Applications/Felix.app" ]; then
+  echo "[felix-uninstall] removing /Applications/Felix.app"
+  rm -rf "/Applications/Felix.app"
+fi
+
+# -------- Remove the CLI symlink (only if it points into Felix.app) ------
+# A user might have installed a different felix via Homebrew etc.;
+# don't touch it unless we're sure it's our symlink.
+if [ -L "/usr/local/bin/felix" ]; then
+  target=$(readlink "/usr/local/bin/felix")
+  case "$target" in
+    /Applications/Felix.app/*)
+      echo "[felix-uninstall] removing /usr/local/bin/felix (was → $target)"
+      rm -f "/usr/local/bin/felix"
+      ;;
+    *)
+      echo "[felix-uninstall] keeping /usr/local/bin/felix — points to $target (not ours)"
+      ;;
+  esac
+fi
+
+# -------- Remove the bundled skills directory ----------------------------
+if [ -d "/usr/local/share/felix" ]; then
+  echo "[felix-uninstall] removing /usr/local/share/felix"
+  rm -rf "/usr/local/share/felix"
+fi
+
+# -------- Forget the package receipt -------------------------------------
+# Metadata-only — tells macOS the package is no longer installed so a
+# future installer doesn't think files are still owned. Idempotent.
+if pkgutil --pkg-info com.felix.app >/dev/null 2>&1; then
+  echo "[felix-uninstall] forgetting com.felix.app"
+  pkgutil --forget com.felix.app || true
+fi
+
+# -------- Drop a "what about my data" hint for the user ------------------
+# We deliberately leave ~/.felix alone. The Conclusion pane in the
+# distribution.xml tells the user where to find it and how to wipe
+# it manually if they want.
+LOGGED_IN_USER=$(scutil <<< "show State:/Users/ConsoleUser" \
+  | awk '/Name :/ && ! /loginwindow/ { print $3 }')
+if [ -n "$LOGGED_IN_USER" ]; then
+  USER_HOME=$(dscl . -read /Users/"$LOGGED_IN_USER" NFSHomeDirectory 2>/dev/null \
+    | awk '{print $2}')
+  if [ -n "$USER_HOME" ] && [ -d "$USER_HOME/.felix" ]; then
+    SIZE=$(du -sh "$USER_HOME/.felix" 2>/dev/null | awk '{print $1}')
+    echo "[felix-uninstall] user data preserved at $USER_HOME/.felix ($SIZE)"
+    echo "[felix-uninstall]   to wipe it: rm -rf $USER_HOME/.felix"
+  fi
+fi
+
+echo "[felix-uninstall] done"
+exit 0

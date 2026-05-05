@@ -67,7 +67,28 @@ The installer drops `Felix.app` into `/Applications`, bundles the `felix` and `f
 
 On first launch, Felix.app opens `http://127.0.0.1:18789/settings#models` and starts pulling `gemma4` (~9.6 GB chat model) and `nomic-embed-text` (~270 MB embeddings) in the background. Once the chat model is on disk, click **Chat** in the menu bar to start talking. Zero config, no API keys.
 
-To uninstall: `rm /usr/local/bin/felix && rm -rf /Applications/Felix.app ~/.felix/`.
+### Uninstall
+
+Three ways, pick whichever's easiest:
+
+1. **From the menubar** — click the Felix menubar icon → **Uninstall Felix…**. macOS Installer.app opens with the bundled `Felix-Uninstaller.pkg`, prompts for your admin password, and runs the cleanup.
+2. **Double-click the uninstaller `.pkg`** — `Felix-Uninstaller-vX.Y.Z.pkg` ships alongside the main installer on the [Releases](https://github.com/sausheong/felix/releases) page. Same flow as option 1 without needing the menubar.
+3. **By hand**, if you don't want to run a `.pkg`:
+   ```bash
+   sudo rm -rf /Applications/Felix.app /usr/local/share/felix
+   sudo rm -f  /usr/local/bin/felix
+   sudo pkgutil --forget com.felix.app
+   ```
+
+All three remove the app, the CLI symlink at `/usr/local/bin/felix`, the bundled skills directory at `/usr/local/share/felix`, and the `pkgutil` receipt.
+
+**Your data is preserved** at `~/.felix/` — config, sessions, memory, and pulled local models (typically 5–25 GB). To wipe that too:
+
+```bash
+rm -rf ~/.felix
+```
+
+The uninstaller deliberately doesn't touch `~/.felix` so an accidental run doesn't wipe gigabytes of pulled models or destroy chat history.
 
 ### Build from source (Linux, Windows, or developers)
 

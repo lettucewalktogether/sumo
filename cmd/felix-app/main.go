@@ -157,6 +157,13 @@ func onReady() {
 	mSettings := systray.AddMenuItem("Settings", "Open settings in browser")
 	mRestart := systray.AddMenuItem("Restart", "Restart the gateway")
 	systray.AddSeparator()
+	// Uninstall hand-off — opens the bundled Felix-Uninstaller.pkg
+	// via /usr/bin/open, which routes it through macOS Installer.app
+	// (the user gets the standard installer GUI + sudo prompt). The
+	// .pkg is placed inside the bundle by `make installer`, so it's
+	// always available even when the user is offline.
+	mUninstall := systray.AddMenuItem("Uninstall Felix…",
+		"Open Felix-Uninstaller.pkg in macOS Installer")
 	mQuit := systray.AddMenuItem("Quit", "Shut down and exit")
 
 	// SIGTERM/SIGINT here are mostly for terminal-driven kills (e.g.
@@ -190,6 +197,34 @@ func onReady() {
 				gw = newGw
 				port = newGw.port
 				slog.Info("gateway restarted", "port", port)
+			case <-mUninstall.ClickedCh:
+				// Resolve the bundled uninstaller relative to the
+				// running binary so this works whether the menubar
+				// app is running from /Applications/Felix.app or
+				// from a dev build in the repo. exe = .../Felix.app/
+				// Contents/MacOS/felix-app → up two = Contents → +
+				// Resources/Felix-Uninstaller.pkg.
+				pkgPath := ""
+				if exe, err := os.Executable(); err == nil {
+					pkgPath = filepath.Join(filepath.Dir(filepath.Dir(exe)),
+						"Resources", "Felix-Uninstaller.pkg")
+				}
+				if pkgPath == "" {
+					showError("Could not locate Felix-Uninstaller.pkg.")
+					continue
+				}
+				if _, err := os.Stat(pkgPath); err != nil {
+					showError(fmt.Sprintf(
+						"Felix-Uninstaller.pkg not found at:\n\n%s\n\n"+
+							"This Felix.app may have been built without one. "+
+							"Download Felix-Uninstaller-<version>.pkg from the "+
+							"GitHub releases page instead.", pkgPath))
+					continue
+				}
+				slog.Info("opening uninstaller", "path", pkgPath)
+				if err := exec.Command("/usr/bin/open", pkgPath).Start(); err != nil {
+					showError(fmt.Sprintf("Could not open the uninstaller:\n\n%v", err))
+				}
 			case <-mQuit.ClickedCh:
 				shutdownAndExit(gw, "menu Quit clicked")
 				return
