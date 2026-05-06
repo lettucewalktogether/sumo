@@ -90,6 +90,38 @@ func TestBuildDefaultIdentityToolSpecific(t *testing.T) {
 	assert.NotContains(t, result, "send_message")
 }
 
+// TestStaticSystemPromptIncludesWebChatCapabilities locks in the
+// preamble that tells the model about the per-response action
+// toolbar (Copy / Download ▾ / Translate ▾). Without this section
+// the model falls back to its training-data refusals ("I can't
+// export to PDF / I can't translate / copy-paste it elsewhere").
+// Applies regardless of whether identity comes from systemPrompt
+// arg, IDENTITY.md, or the built-in default.
+func TestStaticSystemPromptIncludesWebChatCapabilities(t *testing.T) {
+	dir := t.TempDir()
+
+	// Default identity path.
+	defaultPrompt := BuildStaticSystemPrompt(dir, "", "agent", "Agent",
+		nil, "", "", "", "")
+	assert.Contains(t, defaultPrompt, "Felix web chat capabilities")
+	assert.Contains(t, defaultPrompt, "Action toolbar on every response")
+	assert.Contains(t, defaultPrompt, "Save as PDF")
+	assert.Contains(t, defaultPrompt, "Save as Word")
+	assert.Contains(t, defaultPrompt, "Translate")
+	assert.Contains(t, defaultPrompt, "Sources Referenced")
+	assert.Contains(t, defaultPrompt, "Never tell the user you cannot")
+	assert.Contains(t, defaultPrompt, "File attachments")
+
+	// Custom systemPrompt arg path — the UI capabilities must still be
+	// appended so an operator with their own IDENTITY.md doesn't lose
+	// the export / translate / copy guidance.
+	customPrompt := BuildStaticSystemPrompt(dir, "I am a custom agent.", "agent", "Agent",
+		nil, "", "", "", "")
+	assert.Contains(t, customPrompt, "I am a custom agent.")
+	assert.Contains(t, customPrompt, "Save as PDF")
+	assert.Contains(t, customPrompt, "Felix web chat capabilities")
+}
+
 // --- assembleMessages tests ---
 
 func TestAssembleMessagesUserAndAssistant(t *testing.T) {

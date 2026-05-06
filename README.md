@@ -67,7 +67,28 @@ The installer drops `Felix.app` into `/Applications`, bundles the `felix` and `f
 
 On first launch, Felix.app opens `http://127.0.0.1:18789/settings#models` and starts pulling `gemma4` (~9.6 GB chat model) and `nomic-embed-text` (~270 MB embeddings) in the background. Once the chat model is on disk, click **Chat** in the menu bar to start talking. Zero config, no API keys.
 
-To uninstall: `rm /usr/local/bin/felix && rm -rf /Applications/Felix.app ~/.felix/`.
+### Uninstall
+
+Three ways, pick whichever's easiest:
+
+1. **From the menubar** — click the Felix menubar icon → **Uninstall Felix…**. macOS Installer.app opens with the bundled `Felix-Uninstaller.pkg`, prompts for your admin password, and runs the cleanup.
+2. **Double-click the uninstaller `.pkg`** — `Felix-Uninstaller-vX.Y.Z.pkg` ships alongside the main installer on the [Releases](https://github.com/sausheong/felix/releases) page. Same flow as option 1 without needing the menubar.
+3. **By hand**, if you don't want to run a `.pkg`:
+   ```bash
+   sudo rm -rf /Applications/Felix.app /usr/local/share/felix
+   sudo rm -f  /usr/local/bin/felix
+   sudo pkgutil --forget com.felix.app
+   ```
+
+All three remove the app, the CLI symlink at `/usr/local/bin/felix`, the bundled skills directory at `/usr/local/share/felix`, and the `pkgutil` receipt.
+
+**Your data is preserved** at `~/.felix/` — config, sessions, memory, and pulled local models (typically 5–25 GB). To wipe that too:
+
+```bash
+rm -rf ~/.felix
+```
+
+The uninstaller deliberately doesn't touch `~/.felix` so an accidental run doesn't wipe gigabytes of pulled models or destroy chat history.
 
 ### Build from source (Linux, Windows, or developers)
 
@@ -197,7 +218,7 @@ The 256 KiB output cap per attachment keeps the prompt finite even on hostile in
 
 The textarea sets `dir="auto"`, which the browser resolves per-paragraph from the first strong-directional character in each line — so Arabic and Hebrew lines flow right-to-left, English lines stay left-to-right, and a mixed-script message gets each paragraph oriented correctly without any user toggling. Enter sends the message *except* while an IME is composing — the handler tracks `compositionstart` / `compositionend` and skips the send when `KeyboardEvent.isComposing` (or the legacy `keyCode === 229`) is true, so CJK, Vietnamese, and Korean candidate-commit Enter no longer fires the message prematurely. Attached text files decode with BOM detection (UTF-8 BOM stripped; UTF-16 LE/BE with or without BOM transcoded to UTF-8 via `golang.org/x/text/encoding/unicode`); legacy single-byte encodings are rejected with a clear hint rather than silently mangled.
 
-The chat surface itself is model-neutral — pick whichever provider speaks the languages you care about. Frontier models (Claude, GPT, Gemini) handle most major languages well; for **Southeast Asian languages** (Bahasa Indonesia, Malay, Thai, Vietnamese, Tamil, Filipino, Singlish, regional variants) [SEA-LION](https://sea-lion.ai/) from AI Singapore is purpose-built and plugs in via the `openai-compatible` provider — see the SEA-LION block in **LLM providers › Per-provider setup** below.
+The chat surface itself is model-neutral — pick whichever provider speaks the languages you care about. Frontier models (Claude, GPT, Gemini) handle most major languages well; for **Southeast Asian languages** (Bahasa Indonesia, Malay, Thai, Vietnamese, Tamil, Filipino, Khmer, Lao, Burmese, Javanese, Sundanese, Singlish, regional variants) [SEA-LION](https://sea-lion.ai/) from AI Singapore is purpose-built. Two paths: the cloud API (`openai-compatible` provider with a `sl-...` key) or fully local via the bundled Ollama (one-click download from **Settings → Models** — both an 8B and a 27B variant are listed). See the SEA-LION block in **LLM providers › Per-provider setup** below.
 
 ### Pure-attachment messages
 
@@ -290,8 +311,10 @@ Felix supports multiple providers simultaneously. Each is defined in the `provid
 
 // SEA-LION (AI Singapore) — open-source LLMs purpose-built for
 // Southeast Asian languages: Bahasa Indonesia, Malay, Thai, Vietnamese,
-// Tamil, Filipino, plus Singlish and other regional variants. Get a key
-// at https://playground.sea-lion.ai/key-manager
+// Tamil, Filipino, Khmer, Lao, Burmese, Javanese, Sundanese, plus
+// Singlish and other regional variants. Two ways to plug it in:
+//
+// (1) CLOUD API — get a key at https://playground.sea-lion.ai/key-manager
 "sealion": {
   "kind": "openai-compatible",
   "api_key": "sl-...",
@@ -304,6 +327,15 @@ Felix supports multiple providers simultaneously. Each is defined in the `provid
 // Reference as: sealion/aisingapore/Gemma-SEA-LION-v4-27B-IT
 // Public API rate limit is 10 requests/min/user as of writing; email
 // sealion@aisingapore.org for higher limits.
+//
+// (2) LOCAL via bundled Ollama — no key needed, no rate limit, runs
+// fully offline. AI Singapore publishes Ollama-pullable tags:
+//   aisingapore/Llama-SEA-LION-v3.5-8B-R   — 8B Llama-3-reasoning (~4.9 GB)
+//   aisingapore/Gemma-SEA-LION-v4-27B-IT   — 27B Gemma-3-instruct (~18 GB,
+//                                            needs ~16 GB unified memory)
+// Pull from the Settings → Models tab (one-click) or via:
+//   ollama pull aisingapore/Llama-SEA-LION-v3.5-8B-R
+// Reference as: local/aisingapore/Llama-SEA-LION-v3.5-8B-R
 
 // Bundled Ollama (wired up automatically by `felix onboard`)
 "local": { "kind": "local", "base_url": "http://127.0.0.1:18790/v1" }

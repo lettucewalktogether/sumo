@@ -10,7 +10,7 @@ APP_SIGN_ID      := Developer ID Application: Sau Sheong Chang (83N864XA6Z)
 PKG_SIGN_ID      := Developer ID Installer: Sau Sheong Chang (83N864XA6Z)
 KEYCHAIN_PROFILE := felix-notary
 
-.PHONY: build build-app build-app-windows build-small run test test-race test-v lint fmt vet tidy clean snapshot install release publish-release build-release installer installer-windows sign ollama-fetch _payload-secret-scan _payload-secret-scan-windows
+.PHONY: build build-app build-app-windows build-small run test test-race test-v lint fmt vet tidy clean snapshot install release publish-release build-release installer uninstaller installer-windows sign ollama-fetch _payload-secret-scan _payload-secret-scan-windows
 
 ## build: compile the binary
 build:
@@ -265,8 +265,33 @@ build-release: ollama-fetch
 	@echo "Release artifacts in $(RELEASE_DIR)/:"
 	@ls -1 $(RELEASE_DIR)/*.zip
 
-## installer: build a macOS PKG installer with bundled skills and provider setup
-installer: build-app
+## uninstaller: build a payload-free macOS PKG that removes Felix when run.
+##
+## When the user double-clicks the resulting Felix-Uninstaller.pkg, the
+## macOS Installer.app prompts for an admin password (its standard GUI
+## flow), then runs installer/uninstaller-scripts/postinstall as root.
+## That script stops the menubar app + bundled ollama, removes
+## /Applications/Felix.app, the /usr/local/bin/felix symlink (only if
+## still ours), /usr/local/share/felix, and the pkgutil receipt for
+## com.felix.app. It deliberately does NOT touch ~/.felix so the user
+## doesn't lose 16+ GB of pulled local models on an accidental run —
+## the install README covers manual data wipe.
+uninstaller:
+	pkgbuild \
+		--nopayload \
+		--scripts installer/uninstaller-scripts \
+		--identifier com.felix.uninstaller \
+		--version $(VERSION) \
+		Felix-Uninstaller-$(VERSION).pkg
+	@echo "Uninstaller: Felix-Uninstaller-$(VERSION).pkg"
+
+## installer: build a macOS PKG installer with bundled skills and provider setup.
+##
+## Now also bundles the matching Felix-Uninstaller.pkg into the app at
+## /Applications/Felix.app/Contents/Resources/Felix-Uninstaller.pkg so
+## the menubar's "Uninstall Felix…" item can hand the user straight off
+## to the standard installer GUI without needing a separate download.
+installer: build-app uninstaller
 	# Wipe any stale staging area BEFORE building so an aborted previous run
 	# (or files dropped in by hand for testing) can't leak into the .pkg.
 	rm -rf installer/payload
@@ -278,6 +303,10 @@ installer: build-app
 	  cp bin/ollama-darwin-arm64 installer/payload/Applications/Felix.app/Contents/Resources/bin/ollama; \
 	fi
 	cp skills/*.md installer/payload/usr/local/share/felix/skills/
+	# Bundle the freshly-built uninstaller .pkg inside the app so the
+	# menubar item can launch it without a separate download.
+	cp Felix-Uninstaller-$(VERSION).pkg \
+	   installer/payload/Applications/Felix.app/Contents/Resources/Felix-Uninstaller.pkg
 	@$(MAKE) --no-print-directory _payload-secret-scan
 	pkgbuild \
 		--root installer/payload \
@@ -292,7 +321,8 @@ installer: build-app
 		--identifier com.felix.app \
 		Felix-$(VERSION).pkg
 	rm -rf Felix-component.pkg installer/payload
-	@echo "Installer: Felix-$(VERSION).pkg"
+	@echo "Installer:   Felix-$(VERSION).pkg"
+	@echo "Uninstaller: Felix-Uninstaller-$(VERSION).pkg"
 
 ## installer-windows: build a Windows .exe installer (Inno Setup) with bundled skills + ollama
 ##

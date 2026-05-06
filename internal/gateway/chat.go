@@ -3,10 +3,15 @@ package gateway
 import (
 	"fmt"
 	"net/http"
+	"strings"
 )
 
-// NewChatHandler returns an HTTP handler func that serves the chat web interface.
-func NewChatHandler(port int) http.HandlerFunc {
+// NewChatHandler returns an HTTP handler func that serves the chat web
+// interface. The version string is injected into the sidebar brand so
+// the running build is visible at a glance — sanitised through
+// sanitizeVersionString first since it ends up in raw HTML.
+func NewChatHandler(port int, version string) http.HandlerFunc {
+	safeVersion := sanitizeVersionString(version)
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -14,9 +19,44 @@ func NewChatHandler(port int) http.HandlerFunc {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		// blob: in img-src is needed for the in-page attachment thumbnails
 		// generated via URL.createObjectURL on dropped/picked image files.
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src ws: wss:; img-src 'self' data: blob:")
-		fmt.Fprintf(w, chatHTML, port)
+		// connect-src includes 'self' so the per-response Translate
+		// fetch (POST /api/translate) and any other same-origin XHR
+		// can run without being blocked. ws: / wss: stay for the
+		// chat WebSocket.
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data: blob:")
+		fmt.Fprintf(w, chatHTML, safeVersion, port)
 	}
+}
+
+// sanitizeVersionString limits the version string to characters that
+// are safe to drop directly into HTML without further escaping. git
+// describe output is always within this set; a hostile build that
+// somehow produces other characters gets them stripped rather than
+// trusted into the page. Empty input falls back to "dev".
+func sanitizeVersionString(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "dev"
+	}
+	var b strings.Builder
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '.', r == '-', r == '_', r == '+':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "dev"
+	}
+	const maxLen = 40
+	out := b.String()
+	if len(out) > maxLen {
+		out = out[:maxLen]
+	}
+	return out
 }
 
 const chatHTML = `<!DOCTYPE html>
@@ -331,20 +371,253 @@ html.light #header .logo {
 #messages {
 	flex: 1;
 	overflow-y: auto;
+	overflow-x: hidden;
 	padding: 1rem 1.5rem;
 	display: flex;
 	flex-direction: column;
 	gap: 1rem;
+	min-width: 0;
 }
 .msg {
+	position: relative;
 	max-width: 85%%;
+	min-width: 0;
 	padding: 0.75rem 1rem;
 	border-radius: 12px;
 	line-height: 1.5;
+	font-size: 0.9rem;
 	word-wrap: break-word;
 	overflow-wrap: break-word;
 	transition: background 0.3s, border-color 0.3s;
 }
+/* Wrap holds the bubble + optional translation panel + sources card
+   so they all align on the same axis as the bubble (and respect
+   .msg's align-self left/right). */
+.assistant-wrap {
+	display: flex;
+	flex-direction: column;
+	max-width: 85%%;
+	min-width: 0;
+	align-self: flex-start;
+	gap: 0.5rem;
+}
+.assistant-wrap .msg.assistant {
+	align-self: stretch;
+	max-width: none;
+	min-width: 0;
+}
+/* Per-response action toolbar — Copy / Download ▾ / Translate ▾ pills
+   sit at the bottom of every finalised assistant bubble. Hidden
+   while streaming so users don't click Copy on a partial response. */
+.msg-toolbar {
+	display: none;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.4rem;
+	margin-top: 0.65rem;
+	padding-top: 0.55rem;
+	border-top: 1px solid var(--border);
+}
+.msg.assistant.finalized .msg-toolbar { display: flex; }
+.msg-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.3rem;
+	padding: 0.3rem 0.65rem;
+	background: transparent;
+	color: var(--text);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	font-size: 0.75rem;
+	font-weight: 500;
+	line-height: 1;
+	cursor: pointer;
+	transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.msg-pill:hover { background: var(--bg-input); border-color: var(--accent); color: var(--accent); }
+.msg-pill svg { flex-shrink: 0; }
+.msg-pill .pill-label { white-space: nowrap; }
+.msg-pill-confirm { background: var(--bg-input); border-color: var(--accent); color: var(--accent); }
+
+/* Thinking indicator — minimal pseudo-bubble shown the moment the
+   user hits Send so they have visual confirmation the request is
+   in flight, before the first token arrives. Replaced by the
+   actual streaming bubble on first delta. */
+.msg-thinking {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.55rem;
+	padding: 0.55rem 0.95rem;
+	font-size: 0.85rem;
+	color: var(--text-muted);
+}
+.msg-thinking .thinking-label { font-style: italic; }
+.thinking-dots {
+	display: inline-flex;
+	gap: 0.25rem;
+	align-items: center;
+}
+.thinking-dots span {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%%;
+	background: var(--accent);
+	opacity: 0.35;
+	animation: thinking-pulse 1.2s infinite ease-in-out;
+}
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes thinking-pulse {
+	0%%, 80%%, 100%% { opacity: 0.25; transform: scale(0.85); }
+	40%%             { opacity: 1.0;  transform: scale(1.15); }
+}
+
+.msg-pill-wrap { position: relative; display: inline-flex; }
+.msg-dropdown {
+	display: none;
+	position: absolute;
+	top: 100%%;
+	left: 0;
+	margin-top: 0.3rem;
+	min-width: 11rem;
+	max-height: 14rem;
+	overflow-y: auto;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+	z-index: 30;
+	padding: 0.25rem 0;
+}
+.msg-dropdown-tall { max-height: 18rem; }
+.msg-pill-wrap.open .msg-dropdown { display: block; }
+.msg-dropdown-item {
+	display: block;
+	width: 100%%;
+	text-align: left;
+	padding: 0.45rem 0.8rem;
+	background: transparent;
+	color: var(--text);
+	border: 0;
+	font-size: 0.8rem;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.msg-dropdown-item:hover { background: var(--bg-input); color: var(--accent); }
+
+/* Translation panel — amber tint so it's clearly distinct from the
+   underlying response, mirrors the kc-planning-assistant pattern. */
+.msg-translation {
+	background: rgba(180, 130, 40, 0.12);
+	border: 1px solid rgba(180, 130, 40, 0.45);
+	border-radius: 12px;
+	padding: 0.7rem 0.95rem;
+	font-size: 0.9rem;
+	line-height: 1.5;
+	color: var(--text);
+	/* Same flexbox containment + overflow guarantees as the
+	   primary bubble — long unbreakable content (a URL, an
+	   inline-code span, a wide table cell) scrolls its own
+	   element rather than blowing out the chat layout. */
+	min-width: 0;
+	max-width: 100%%;
+	overflow-wrap: anywhere;
+}
+.msg-translation pre {
+	background: var(--bg-code);
+	padding: 0.6rem 0.8rem;
+	border-radius: 6px;
+	overflow-x: auto;
+	max-width: 100%%;
+	margin: 0.5em 0;
+	border: 1px solid rgba(180, 130, 40, 0.35);
+}
+.msg-translation pre code {
+	white-space: pre;
+	overflow-wrap: normal;
+	word-break: normal;
+}
+.msg-translation table {
+	display: block;
+	max-width: 100%%;
+	overflow-x: auto;
+	border-collapse: collapse;
+}
+.msg-translation ul, .msg-translation ol {
+	margin: 0.5em 0 0.5em 1.5em;
+	max-width: 100%%;
+	min-width: 0;
+}
+.msg-translation li {
+	margin-bottom: 0.25em;
+	min-width: 0;
+	max-width: 100%%;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+.msg-translation li code,
+.msg-translation p  code {
+	white-space: normal;
+	word-break: break-all;
+	overflow-wrap: anywhere;
+}
+.msg-translation-header {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	margin-bottom: 0.4rem;
+	padding-bottom: 0.35rem;
+	border-bottom: 1px solid rgba(180, 130, 40, 0.35);
+	font-size: 0.7rem;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: rgb(220, 170, 80);
+}
+.msg-translation-status { color: var(--text-muted); text-transform: none; letter-spacing: 0; font-size: 0.7rem; }
+.msg-translation-body { white-space: normal; }
+.msg-translation-body p { margin-bottom: 0.5em; }
+.msg-translation-body p:last-child { margin-bottom: 0; }
+
+/* Sources Referenced card — tight chips of any URLs the model cited
+   in this response so users can jump back to source material. */
+.msg-sources {
+	background: var(--bg-msg-asst);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 0.6rem 0.85rem;
+}
+.msg-sources-header {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	margin-bottom: 0.5rem;
+	font-size: 0.7rem;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--text-muted);
+}
+.msg-sources-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+}
+.msg-source-chip {
+	display: inline-flex;
+	align-items: center;
+	max-width: 100%%;
+	padding: 0.25rem 0.7rem;
+	background: var(--bg-input);
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	font-size: 0.75rem;
+	color: var(--accent2);
+	text-decoration: none;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	transition: border-color 0.15s ease, color 0.15s ease;
+}
+.msg-source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .msg.user {
 	background: var(--bg-msg-user);
 	align-self: flex-end;
@@ -355,6 +628,17 @@ html.light #header .logo {
 	align-self: flex-start;
 	border-bottom-left-radius: 4px;
 	border: 1px solid var(--border);
+}
+/* The .content div is the markdown render target. min-width:0 +
+   max-width:100%% lets long unbreakable inline content (a giant
+   URL, a long inline code span) shrink with the bubble instead of
+   forcing it to grow. Combined with overflow-x:auto on the inner
+   <pre>, code blocks scroll horizontally inside themselves rather
+   than blowing out the chat layout. */
+.msg.assistant .content {
+	min-width: 0;
+	max-width: 100%%;
+	overflow-wrap: anywhere;
 }
 .msg.assistant .content p { margin-bottom: 0.5em; }
 .msg.assistant .content p:last-child { margin-bottom: 0; }
@@ -370,6 +654,7 @@ html.light #header .logo {
 	padding: 0.75rem;
 	border-radius: 6px;
 	overflow-x: auto;
+	max-width: 100%%;
 	margin: 0.5em 0;
 	border: 1px solid var(--border);
 	transition: background 0.3s, border-color 0.3s;
@@ -378,6 +663,13 @@ html.light #header .logo {
 	background: none;
 	padding: 0;
 	font-size: 0.85em;
+	/* Code stays on one line per source line — overflow-wrap from
+	   the parent .content would otherwise force-wrap mid-token,
+	   which destroys readability. The parent <pre>'s overflow-x:
+	   auto handles the horizontal scroll. */
+	white-space: pre;
+	overflow-wrap: normal;
+	word-break: normal;
 }
 .msg.assistant .content a { color: var(--accent2); }
 .msg.assistant .content strong { color: var(--text-strong); }
@@ -401,8 +693,32 @@ html.light #header .logo {
 }
 .msg.assistant .content ul, .msg.assistant .content ol {
 	margin: 0.5em 0 0.5em 1.5em;
+	/* Pin the list itself to the bubble width so a long inline
+	   <code> token (email, URL, file path) can't push the list
+	   wider than the bubble. */
+	max-width: 100%%;
+	min-width: 0;
 }
-.msg.assistant .content li { margin-bottom: 0.25em; }
+.msg.assistant .content li {
+	margin-bottom: 0.25em;
+	/* Same containment for each item — combined with parent's
+	   overflow-wrap: anywhere this lets long unbreakable tokens
+	   inside list items wrap at any character rather than blowing
+	   out the row. */
+	min-width: 0;
+	max-width: 100%%;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+/* Inline code inside list items: don't preserve whitespace,
+   wrap aggressively. (pre>code keeps the no-wrap rule above so
+   actual code blocks still scroll horizontally.) */
+.msg.assistant .content li code,
+.msg.assistant .content p  code {
+	white-space: normal;
+	word-break: break-all;
+	overflow-wrap: anywhere;
+}
 .msg.assistant .content table {
 	border-collapse: collapse;
 	margin: 0.5em 0;
@@ -725,6 +1041,19 @@ html.light #header .logo {
 	font-weight: 600;
 	color: var(--accent);
 	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+#sidebar-version {
+	font-size: 0.62rem;
+	font-weight: 400;
+	color: var(--text-muted);
+	font-family: "SF Mono", "Fira Code", monospace;
+	letter-spacing: 0.01em;
+	margin-left: 0.3rem;
+	vertical-align: middle;
 }
 #new-chat-btn {
 	display: flex;
@@ -775,6 +1104,9 @@ html.light #header .logo {
 	padding: 0.5rem 0.7rem 0.6rem;
 	border-top: 1px solid var(--border);
 	flex-shrink: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
 }
 #sidebar-footer #token-chip {
 	display: block;
@@ -785,6 +1117,25 @@ html.light #header .logo {
 	padding: 0.3rem 0.5rem;
 	cursor: help;
 }
+#bug-report-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.4rem;
+	width: 100%%;
+	box-sizing: border-box;
+	padding: 0.4rem 0.6rem;
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	color: var(--text-muted);
+	font-size: 0.72rem;
+	font-family: inherit;
+	cursor: pointer;
+	transition: border-color 0.15s ease, color 0.15s ease;
+}
+#bug-report-btn:hover { border-color: var(--accent); color: var(--accent); }
+#bug-report-btn svg { flex-shrink: 0; }
 #sidebar-toggle {
 	background: none;
 	border: 1px solid var(--border);
@@ -933,7 +1284,7 @@ html.light #header .logo {
 	border-radius: 6px;
 	padding: 0.5rem 0.6rem 0.55rem;
 	color: var(--text-em);
-	font-size: 0.83rem;
+	font-size: 0.88rem;
 	cursor: pointer;
 	margin-bottom: 1px;
 }
@@ -954,7 +1305,7 @@ html.light #header .logo {
 }
 .session-row .row-preview {
 	display: block;
-	font-size: 0.7rem;
+	font-size: 0.75rem;
 	color: var(--text-muted);
 	margin-top: 0.15rem;
 	white-space: nowrap;
@@ -1232,6 +1583,11 @@ html.light #header .logo {
 		<path d="M10 11v6M14 11v6"/>
 		<path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>
 	</symbol>
+	<symbol id="i-export" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+		<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+		<polyline points="7 10 12 5 17 10"/>
+		<line x1="12" y1="5" x2="12" y2="15"/>
+	</symbol>
 	<symbol id="i-pause" viewBox="0 0 24 24" fill="currentColor">
 		<rect x="7" y="5" width="3.5" height="14" rx="0.6"/>
 		<rect x="13.5" y="5" width="3.5" height="14" rx="0.6"/>
@@ -1254,7 +1610,7 @@ html.light #header .logo {
 <div id="layout">
 <aside id="sidebar">
 	<div id="sidebar-header">
-		<span id="sidebar-brand">Felix</span>
+		<span id="sidebar-brand">Felix <span id="sidebar-version" title="Felix gateway version">%s</span></span>
 		<button id="settings-btn" type="button" title="Open settings" aria-label="Open settings"><svg class="icon"><use href="#i-cog"/></svg></button>
 	</div>
 	<div id="sidebar-tabs" role="tablist">
@@ -1274,6 +1630,10 @@ html.light #header .logo {
 	</div>
 	<div id="sidebar-footer">
 		<span id="token-chip" title="Tokens used / context window">—</span>
+		<button id="bug-report-btn" type="button" title="Report a bug — opens a prefilled GitHub issue in a new tab">
+			<svg width="13" height="13" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2l1.88 1.88"></path><path d="M14.12 3.88L16 2"></path><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"></path><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6z"></path><path d="M12 20v-9"></path><path d="M6.53 9C4.6 8.8 3 7.1 3 5"></path><path d="M6 13H2"></path><path d="M3 21c0-2.1 1.7-3.8 3.8-4"></path><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"></path><path d="M22 13h-4"></path><path d="M17.2 17c2.1.2 3.8 1.9 3.8 4"></path></svg>
+			<span>Report a bug</span>
+		</button>
 	</div>
 </aside>
 <main id="main-pane">
@@ -1617,6 +1977,41 @@ html.light #header .logo {
 	// in tokens; populated from agent.status so switching agents
 	// updates the chip even before the first turn on that agent runs.
 	var tokenChip = document.getElementById('token-chip');
+	var bugReportBtn = document.getElementById('bug-report-btn');
+	if (bugReportBtn) {
+		bugReportBtn.addEventListener('click', function() {
+			// Build a prefilled GitHub issue URL with diagnostic
+			// fields so the user does not have to recall version /
+			// browser / OS by hand. URL-encoded, opened in a new
+			// tab. The repo lives at lettucewalktogether/sumo.
+			var versionEl = document.getElementById('sidebar-version');
+			var version = versionEl ? versionEl.textContent.trim() : 'unknown';
+			var ua = navigator.userAgent || 'unknown';
+			var platform = navigator.platform || 'unknown';
+			var lang = navigator.language || 'unknown';
+			var when = new Date().toISOString();
+			// Note: backticks (Markdown code spans) cannot appear in
+			// this Go raw string literal, so the diagnostics line
+			// uses plain quoting. GitHub's issue editor renders
+			// just fine without them.
+			var body =
+				'### What happened\n' +
+				'<!-- describe the bug — what you did, what you expected, what actually happened -->\n\n' +
+				'### Steps to reproduce\n' +
+				'1. \n2. \n3. \n\n' +
+				'### Diagnostics (auto-filled — please leave in)\n' +
+				'- Felix version: ' + version + '\n' +
+				'- Browser: ' + ua + '\n' +
+				'- Platform: ' + platform + '\n' +
+				'- Language: ' + lang + '\n' +
+				'- Submitted: ' + when + '\n';
+			var url = 'https://github.com/lettucewalktogether/sumo/issues/new?' +
+				'title=' + encodeURIComponent('[bug] ') +
+				'&labels=' + encodeURIComponent('bug') +
+				'&body=' + encodeURIComponent(body);
+			window.open(url, '_blank', 'noopener,noreferrer');
+		});
+	}
 	var agentWindows = {};
 	var lastUsage = null;
 	function fmtTokens(n) {
@@ -2236,6 +2631,10 @@ html.light #header .logo {
 		}
 		menu.appendChild(mkItem('Rename', 'i-pencil', false, function(){ beginRenameRow(row, s); }));
 		menu.appendChild(mkItem(s.pinned ? 'Unpin' : 'Pin', 'i-pin', false, function(){ setPinned(s.key, !s.pinned); }));
+		// Export lives on each assistant message bubble (hover-revealed
+		// download icon) — not in the per-thread row menu — so the user's
+		// path-of-least-resistance is to export the specific response
+		// they're looking at, not the whole conversation.
 		var sep = document.createElement('div');
 		sep.className = 'menu-sep';
 		menu.appendChild(sep);
@@ -2324,6 +2723,418 @@ html.light #header .logo {
 			params: { agentId: agentSelect.value, sessionKey: key, pinned: pinned },
 			id: 'session-pin-' + key
 		}));
+	}
+
+	// doExport drives one export. As of v0.1.5 the gateway renders
+	// real PDFs server-side via chromedp.PrintToPDF, so every format
+	// is a single GET that streams the binary back with the right
+	// Content-Disposition — no more "open HTML in new window and
+	// hope the user clicks Print" workaround.
+	function doExport(key, fmt, includeTools, messageIndex) {
+		var url = '/api/session/export?agentId=' +
+			encodeURIComponent(agentSelect.value) +
+			'&sessionKey=' + encodeURIComponent(key) +
+			'&includeTools=' + (includeTools ? 'true' : 'false') +
+			'&format=' + encodeURIComponent(fmt);
+		if (typeof messageIndex === 'number' && messageIndex >= 0) {
+			url += '&messageIndex=' + messageIndex;
+		}
+		var a = document.createElement('a');
+		a.href = url;
+		a.download = ''; // server's Content-Disposition picks the name
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+	}
+
+	// translateLanguages mirrors the server's translateLanguagesOrdered
+	// allowlist (internal/gateway/translate.go). Keep the two in sync —
+	// adding a language here without adding it server-side gives the
+	// user a dropdown entry that returns 400. Grouped to match the
+	// server: European, Southeast Asian (SEA-LION-supported), East
+	// Asian, South Asian, MENA / Africa.
+	var translateLanguages = [
+		{ code: 'en',    name: 'English' },
+		{ code: 'es',    name: 'Spanish' },
+		{ code: 'fr',    name: 'French' },
+		{ code: 'pt',    name: 'Portuguese' },
+		{ code: 'de',    name: 'German' },
+		{ code: 'ru',    name: 'Russian' },
+		{ code: 'uk',    name: 'Ukrainian' },
+		// Southeast Asian — SEA-LION strengths
+		{ code: 'vi',    name: 'Vietnamese' },
+		{ code: 'th',    name: 'Thai' },
+		{ code: 'id',    name: 'Indonesian (Bahasa)' },
+		{ code: 'ms',    name: 'Malay' },
+		{ code: 'tl',    name: 'Tagalog (Filipino)' },
+		{ code: 'my',    name: 'Burmese' },
+		{ code: 'km',    name: 'Khmer' },
+		{ code: 'lo',    name: 'Lao' },
+		{ code: 'ta',    name: 'Tamil' },
+		{ code: 'jv',    name: 'Javanese' },
+		{ code: 'su',    name: 'Sundanese' },
+		// East Asian
+		{ code: 'zh',    name: 'Chinese (Simplified)' },
+		{ code: 'zh-TW', name: 'Chinese (Traditional)' },
+		{ code: 'ja',    name: 'Japanese' },
+		{ code: 'ko',    name: 'Korean' },
+		// South Asian
+		{ code: 'hi',    name: 'Hindi' },
+		{ code: 'ur',    name: 'Urdu' },
+		{ code: 'ne',    name: 'Nepali' },
+		// MENA / Africa
+		{ code: 'ar',    name: 'Arabic' },
+		{ code: 'sw',    name: 'Swahili' },
+		{ code: 'so',    name: 'Somali' },
+		{ code: 'am',    name: 'Amharic' }
+	];
+
+	// buildAssistantToolbar constructs the Copy / Download ▾ /
+	// Translate ▾ pill row that lives at the bottom of every
+	// finalised assistant bubble. messageIndex is baked in so the
+	// download options can pass &messageIndex=N to the export
+	// endpoint and Translate knows which bubble's text to send to
+	// /api/translate.
+	function buildAssistantToolbar(messageIndex) {
+		var bar = document.createElement('div');
+		bar.className = 'msg-toolbar';
+
+		// Copy
+		var copyBtn = document.createElement('button');
+		copyBtn.type = 'button';
+		copyBtn.className = 'msg-pill';
+		copyBtn.innerHTML =
+			'<svg width="14" height="14" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+			'<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>' +
+			'<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>' +
+			'</svg><span class="pill-label">Copy</span>';
+		copyBtn.addEventListener('click', function() {
+			doCopyMessage(messageIndex, copyBtn);
+		});
+		bar.appendChild(copyBtn);
+
+		// Download dropdown
+		bar.appendChild(buildDownloadDropdown(messageIndex));
+
+		// Translate dropdown
+		bar.appendChild(buildTranslateDropdown(messageIndex));
+
+		return bar;
+	}
+
+	function buildDownloadDropdown(messageIndex) {
+		var wrap = document.createElement('div');
+		wrap.className = 'msg-pill-wrap';
+		var btn = document.createElement('button');
+		btn.type = 'button';
+		btn.className = 'msg-pill';
+		btn.setAttribute('aria-haspopup', 'true');
+		btn.setAttribute('aria-expanded', 'false');
+		btn.innerHTML =
+			'<svg width="14" height="14" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+			'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>' +
+			'<polyline points="7 10 12 15 17 10"></polyline>' +
+			'<line x1="12" y1="15" x2="12" y2="3"></line>' +
+			'</svg><span class="pill-label">Download</span>' +
+			'<svg width="11" height="11" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+		var menu = document.createElement('div');
+		menu.className = 'msg-dropdown';
+		menu.setAttribute('role', 'menu');
+		var items = [
+			{ fmt: 'pdf',  label: 'Save as PDF',         hint: 'Real PDF rendered server-side' },
+			{ fmt: 'docx', label: 'Save as Word (.docx)', hint: 'Editable Word document' },
+			{ fmt: 'md',   label: 'Save as Markdown',     hint: 'Plain markdown' }
+		];
+		items.forEach(function(it) {
+			var b = document.createElement('button');
+			b.type = 'button';
+			b.className = 'msg-dropdown-item';
+			b.setAttribute('role', 'menuitem');
+			b.title = it.hint;
+			b.textContent = it.label;
+			b.addEventListener('click', function() {
+				if (!activeSessionKey) return;
+				doExport(activeSessionKey, it.fmt, false, messageIndex);
+				closeOpenDropdowns();
+			});
+			menu.appendChild(b);
+		});
+		btn.addEventListener('click', function(e) {
+			e.stopPropagation();
+			toggleDropdown(wrap, btn);
+		});
+		wrap.appendChild(btn);
+		wrap.appendChild(menu);
+		return wrap;
+	}
+
+	function buildTranslateDropdown(messageIndex) {
+		var wrap = document.createElement('div');
+		wrap.className = 'msg-pill-wrap';
+		var btn = document.createElement('button');
+		btn.type = 'button';
+		btn.className = 'msg-pill';
+		btn.setAttribute('aria-haspopup', 'true');
+		btn.setAttribute('aria-expanded', 'false');
+		// Tooltip explains the network requirement — translation
+		// goes through whatever LLM the active agent is configured
+		// with. Local agent → fully offline. Cloud agent → needs
+		// internet (whatever that provider needs).
+		btn.title = 'Translate this response. Uses your active agent’s model — ' +
+			'fully offline if your active agent is a local model (e.g. SEA-LION via Ollama), ' +
+			'requires internet if it’s a cloud model (Anthropic / OpenAI / Gemini / SEA-LION cloud).';
+		btn.innerHTML =
+			'<svg width="14" height="14" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+			'<path d="M3 5h12M9 3v2m1 9.5A18 18 0 0 1 6.4 9m6.1 9h7M11 21l5-10 5 10M12.7 5C11.8 10.8 8.1 15.6 3 18.1"></path>' +
+			'</svg><span class="pill-label">Translate</span>' +
+			'<svg width="11" height="11" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+		var menu = document.createElement('div');
+		menu.className = 'msg-dropdown msg-dropdown-tall';
+		menu.setAttribute('role', 'menu');
+		translateLanguages.forEach(function(l) {
+			var b = document.createElement('button');
+			b.type = 'button';
+			b.className = 'msg-dropdown-item';
+			b.setAttribute('role', 'menuitem');
+			b.textContent = l.name;
+			b.addEventListener('click', function() {
+				doTranslate(messageIndex, l);
+				closeOpenDropdowns();
+			});
+			menu.appendChild(b);
+		});
+		btn.addEventListener('click', function(e) {
+			e.stopPropagation();
+			toggleDropdown(wrap, btn);
+		});
+		wrap.appendChild(btn);
+		wrap.appendChild(menu);
+		return wrap;
+	}
+
+	// Single-source-of-truth dropdown coordination — at most one
+	// per-message dropdown is open at a time, and a click anywhere
+	// outside the open one closes it.
+	var openDropdownWrap = null;
+	function toggleDropdown(wrap, btn) {
+		if (openDropdownWrap === wrap) {
+			closeOpenDropdowns();
+			return;
+		}
+		closeOpenDropdowns();
+		wrap.classList.add('open');
+		btn.setAttribute('aria-expanded', 'true');
+		openDropdownWrap = wrap;
+	}
+	function closeOpenDropdowns() {
+		if (!openDropdownWrap) return;
+		openDropdownWrap.classList.remove('open');
+		var b = openDropdownWrap.querySelector('.msg-pill');
+		if (b) b.setAttribute('aria-expanded', 'false');
+		openDropdownWrap = null;
+	}
+	document.addEventListener('click', function() {
+		closeOpenDropdowns();
+	});
+
+	// doCopyMessage drops the rendered markdown of the Nth assistant
+	// bubble onto the clipboard and momentarily flips the pill label
+	// so the user gets visible feedback.
+	function doCopyMessage(messageIndex, btn) {
+		var bubble = messagesEl.querySelector(
+			'.msg.assistant[data-msg-idx="' + messageIndex + '"]');
+		if (!bubble) return;
+		// Walk back up to the bubble's raw markdown — stored on the
+		// JS-side state via currentAssistant (for live messages) or
+		// inferred from the rendered DOM as a fallback.
+		var raw = bubble.dataset.rawText;
+		if (!raw) {
+			// Fall back to the rendered text content.
+			var contentEl = bubble.querySelector('.content');
+			raw = contentEl ? contentEl.innerText : '';
+		}
+		var label = btn.querySelector('.pill-label');
+		var orig = label ? label.textContent : 'Copy';
+		var done = function() {
+			if (label) {
+				label.textContent = 'Copied!';
+				btn.classList.add('msg-pill-confirm');
+				setTimeout(function() {
+					label.textContent = orig;
+					btn.classList.remove('msg-pill-confirm');
+				}, 1500);
+			}
+		};
+		if (navigator.clipboard && navigator.clipboard.writeText) {
+			navigator.clipboard.writeText(raw).then(done, function(){
+				clipboardLegacy(raw); done();
+			});
+		} else {
+			clipboardLegacy(raw);
+			done();
+		}
+	}
+	function clipboardLegacy(text) {
+		var ta = document.createElement('textarea');
+		ta.value = text;
+		ta.style.position = 'fixed';
+		ta.style.opacity = '0';
+		document.body.appendChild(ta);
+		ta.select();
+		try { document.execCommand('copy'); } catch (_) {}
+		document.body.removeChild(ta);
+	}
+
+	// doTranslate streams a translation of the Nth assistant message
+	// into the requested language via /api/translate. The translated
+	// text appears in an amber-tinted panel directly below the
+	// original bubble (kc-planning-assistant pattern), so the source
+	// stays visible alongside the translation.
+	function doTranslate(messageIndex, lang) {
+		var bubble = messagesEl.querySelector(
+			'.msg.assistant[data-msg-idx="' + messageIndex + '"]');
+		if (!bubble) return;
+		var wrap = bubble.parentNode; // .assistant-wrap
+		if (!wrap) return;
+		var raw = bubble.dataset.rawText || '';
+		if (!raw) {
+			var contentEl = bubble.querySelector('.content');
+			raw = contentEl ? contentEl.innerText : '';
+		}
+		if (!raw.trim()) return;
+
+		// Replace any prior translation panel for this bubble.
+		var prior = wrap.querySelector('.msg-translation');
+		if (prior) prior.remove();
+
+		var panel = document.createElement('div');
+		panel.className = 'msg-translation';
+		panel.setAttribute('dir', 'auto');
+		panel.innerHTML =
+			'<div class="msg-translation-header">' +
+				'<span class="msg-translation-label">' + escHtml(lang.name) + '</span>' +
+				'<span class="msg-translation-status">translating…</span>' +
+			'</div>' +
+			'<div class="msg-translation-body"></div>';
+		// Insert immediately after the bubble div so DOM order is:
+		//   [bubble] [translation] [sources?]
+		var sourcesEl = wrap.querySelector('.msg-sources');
+		if (sourcesEl) {
+			wrap.insertBefore(panel, sourcesEl);
+		} else {
+			wrap.appendChild(panel);
+		}
+		var bodyEl = panel.querySelector('.msg-translation-body');
+		var statusEl = panel.querySelector('.msg-translation-status');
+		var accumulated = '';
+
+		fetch('/api/translate', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				agentId: agentSelect.value,
+				text: raw,
+				lang: lang.code
+			})
+		}).then(function(resp) {
+			if (!resp.ok) {
+				return resp.text().then(function(t) { throw new Error(t || ('HTTP ' + resp.status)); });
+			}
+			var reader = resp.body.getReader();
+			var decoder = new TextDecoder();
+			function pump() {
+				return reader.read().then(function(r) {
+					if (r.done) {
+						bodyEl.innerHTML = renderMd(accumulated);
+						if (statusEl) statusEl.textContent = '';
+						return;
+					}
+					accumulated += decoder.decode(r.value, { stream: true });
+					bodyEl.innerHTML = renderMd(accumulated);
+					return pump();
+				});
+			}
+			return pump();
+		}).catch(function(err) {
+			if (statusEl) statusEl.textContent = 'error';
+			bodyEl.textContent = (accumulated ? accumulated + '\n\n' : '') +
+				'[Translation failed: ' + (err && err.message ? err.message : err) + ']';
+		});
+	}
+
+	// extractSources finds URLs cited in the assistant's response so
+	// the per-response Sources Referenced card can chip them. Picks
+	// up: markdown links [label](url), bare https?://… URLs, and
+	// "Sources Referenced:" sections at the end of the message.
+	// Dedups by URL, caps at 12 chips so a chatty model can't blow
+	// out the layout.
+	function extractSources(text) {
+		var seen = {};
+		var out = [];
+		var add = function(url, label) {
+			url = url.trim();
+			if (!url) return;
+			if (!/^https?:\/\//i.test(url)) return;
+			// Strip trailing punctuation that often gets glued onto
+			// auto-linked URLs (").," etc).
+			url = url.replace(/[)\].,;:!?]+$/, '');
+			if (seen[url]) return;
+			seen[url] = true;
+			label = (label || '').replace(/^[-•*\s\[]+|[\]\s]+$/g, '').trim();
+			if (!label) {
+				try { label = new URL(url).hostname.replace(/^www\./, ''); }
+				catch (_) { label = url; }
+			}
+			if (label.length > 80) label = label.slice(0, 77) + '…';
+			out.push({ url: url, label: label });
+		};
+		// Markdown links first so the label-from-text path wins.
+		var mdLinkRe = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+		var m;
+		while ((m = mdLinkRe.exec(text)) !== null) {
+			add(m[2], m[1]);
+			if (out.length >= 12) break;
+		}
+		// Then bare URLs anywhere in the text.
+		if (out.length < 12) {
+			var bareRe = /https?:\/\/[^\s)<>\]"']+/g;
+			while ((m = bareRe.exec(text)) !== null) {
+				add(m[0], '');
+				if (out.length >= 12) break;
+			}
+		}
+		return out;
+	}
+
+	function renderSourcesCard(bubble, sources) {
+		if (!bubble || !bubble.wrap) return;
+		// Replace any existing card so a re-finalize (rare) doesn't
+		// stack two.
+		var prior = bubble.wrap.querySelector('.msg-sources');
+		if (prior) prior.remove();
+		var card = document.createElement('div');
+		card.className = 'msg-sources';
+		var header = document.createElement('div');
+		header.className = 'msg-sources-header';
+		header.innerHTML =
+			'<svg width="13" height="13" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+			'<path d="M13.8 10.2a4 4 0 0 0-5.7 0l-4 4a4 4 0 1 0 5.7 5.7l1.1-1.1m-.8-4.9a4 4 0 0 0 5.7 0l4-4a4 4 0 0 0-5.7-5.7l-1.1 1.1"></path>' +
+			'</svg><span>Sources Referenced</span>';
+		card.appendChild(header);
+		var chips = document.createElement('div');
+		chips.className = 'msg-sources-chips';
+		sources.forEach(function(s) {
+			var a = document.createElement('a');
+			a.className = 'msg-source-chip';
+			a.href = s.url;
+			a.target = '_blank';
+			a.rel = 'noopener noreferrer';
+			a.textContent = s.label;
+			a.title = s.url;
+			chips.appendChild(a);
+		});
+		card.appendChild(chips);
+		bubble.wrap.appendChild(card);
 	}
 
 	function deleteSessionRow(key) {
@@ -2415,6 +3226,38 @@ html.light #header .logo {
 		messagesEl.appendChild(empty);
 		currentAssistant = null;
 		toolEls = {};
+		thinkingEl = null;
+		// Reset the per-bubble export counter — the next assistant
+		// message rendered into a fresh session is "message 0".
+		assistantMsgCounter = 0;
+	}
+
+	// Thinking indicator — a small pseudo-bubble that shows the moment
+	// the user hits Send so they have visual confirmation the request
+	// is in flight. Removed when the first text_delta or tool_call
+	// arrives, OR on done / aborted / error if it somehow survived
+	// (e.g. the model emitted only a tool call with no preceding
+	// text). Mirrors the pattern from the kc-planning-assistant where
+	// "🔵 Searching IB documents..." appears immediately on send.
+	var thinkingEl = null;
+	function showThinking() {
+		if (thinkingEl) return;
+		messagesEl.classList.add('has-messages');
+		var el = document.createElement('div');
+		el.className = 'msg assistant msg-thinking';
+		el.innerHTML =
+			'<span class="thinking-dots" aria-hidden="true">' +
+				'<span></span><span></span><span></span>' +
+			'</span>' +
+			'<span class="thinking-label">Thinking…</span>';
+		messagesEl.appendChild(el);
+		thinkingEl = el;
+		scrollToBottom();
+	}
+	function hideThinking() {
+		if (!thinkingEl) return;
+		thinkingEl.remove();
+		thinkingEl = null;
 	}
 
 	var ws = null;
@@ -2753,6 +3596,9 @@ html.light #header .logo {
 							var bubble = addAssistantMsg();
 							bubble.raw = entry.text;
 							bubble.content.innerHTML = renderMd(entry.text);
+							// Historical message — reveal the toolbar +
+							// sources card right away (no streaming).
+							finalizeBubble(bubble);
 						} else if (entry.type === 'tool_call') {
 							addToolCall(entry.tool, entry.id, entry.input);
 						} else if (entry.type === 'tool_result') {
@@ -2767,12 +3613,14 @@ html.light #header .logo {
 
 				switch (r.type) {
 				case 'text_delta':
+					hideThinking();
 					if (!currentAssistant) {
 						currentAssistant = addAssistantMsg('');
 					}
 					appendToAssistant(r.text);
 					break;
 				case 'tool_call_start':
+					hideThinking();
 					if (currentAssistant) {
 						finalizeAssistant();
 						currentAssistant = null;
@@ -2783,6 +3631,7 @@ html.light #header .logo {
 					updateToolResult(r.tool, r.id, r.input, r.output, r.error, r.images, r.auth_required);
 					break;
 				case 'done':
+					hideThinking();
 					if (currentAssistant) {
 						finalizeAssistant();
 					}
@@ -2799,6 +3648,7 @@ html.light #header .logo {
 				updateTokenChip(r.usage);
 					break;
 				case 'aborted':
+					hideThinking();
 					if (currentAssistant) {
 						finalizeAssistant();
 					}
@@ -2807,6 +3657,7 @@ html.light #header .logo {
 					updateSendBtn();
 					break;
 				case 'error':
+					hideThinking();
 					addError(r.message);
 					currentAssistant = null;
 					sending = false;
@@ -2880,10 +3731,19 @@ html.light #header .logo {
 		scrollToBottom();
 	}
 
+	// Counter for the Nth assistant message in the currently-rendered
+	// session. Bumped by addAssistantMsg, reset by clearMessagesPane.
+	// The value is baked into each assistant bubble as data-msg-idx so
+	// the per-bubble Export button can pass messageIndex=N to the
+	// /api/session/export endpoint.
+	var assistantMsgCounter = 0;
+
 	function addAssistantMsg() {
 		messagesEl.classList.add('has-messages');
 		var div = document.createElement('div');
 		div.className = 'msg assistant';
+		var idx = assistantMsgCounter++;
+		div.setAttribute('data-msg-idx', String(idx));
 		var content = document.createElement('div');
 		content.className = 'content';
 		// Same dir=auto / unicode-bidi:plaintext treatment as user
@@ -2891,9 +3751,25 @@ html.light #header .logo {
 		// correct per-paragraph direction.
 		content.setAttribute('dir', 'auto');
 		div.appendChild(content);
-		messagesEl.appendChild(div);
+		// Per-message action toolbar — Copy / Download ▾ / Translate ▾
+		// pills, mirrors the kc-planning-assistant pattern. Hidden
+		// while the message is streaming (controlled by the parent
+		// .msg.assistant.finalized class) so users don't click Copy
+		// on a partial response.
+		var toolbar = buildAssistantToolbar(idx);
+		div.appendChild(toolbar);
+		// Wrapper holds the bubble + the optional Translation panel
+		// + the Sources Referenced card so they all flow with the
+		// same width and dir as the bubble.
+		var wrap = document.createElement('div');
+		wrap.className = 'assistant-wrap';
+		wrap.appendChild(div);
+		// Translation panel and sources card are appended on demand
+		// (after first translate / on finalize). The wrap exists
+		// from the start so DOM ordering stays stable.
+		messagesEl.appendChild(wrap);
 		scrollToBottom();
-		return { el: div, content: content, raw: '' };
+		return { el: div, wrap: wrap, content: content, raw: '', idx: idx };
 	}
 
 	function appendToAssistant(text) {
@@ -2906,7 +3782,27 @@ html.light #header .logo {
 	function finalizeAssistant() {
 		if (!currentAssistant) return;
 		currentAssistant.content.innerHTML = renderMd(currentAssistant.raw);
+		finalizeBubble(currentAssistant);
 		scrollToBottom();
+	}
+
+	// finalizeBubble reveals the per-response toolbar (Copy / Download
+	// ▾ / Translate ▾) and renders the Sources Referenced card if the
+	// finalised text contains URLs the user might want to revisit.
+	// Called from BOTH the streaming finish path and the history
+	// re-hydrate path so historical messages don't render in a
+	// "still streaming" state.
+	function finalizeBubble(bubble) {
+		if (!bubble || !bubble.el) return;
+		bubble.el.classList.add('finalized');
+		// Pin the raw markdown to the DOM so the Copy / Translate
+		// pills can read it without holding the streaming JS object.
+		// Replaced (not appended) so a re-finalize doesn't stack.
+		bubble.el.dataset.rawText = bubble.raw || '';
+		var sources = extractSources(bubble.raw || '');
+		if (sources.length > 0) {
+			renderSourcesCard(bubble, sources);
+		}
 	}
 
 	var toolEls = {};
@@ -3220,6 +4116,7 @@ html.light #header .logo {
 		attachments = [];
 
 		addUserMsg(text, sentAtts);
+		showThinking();
 		sending = true;
 		updateSendBtn();
 		msgId++;

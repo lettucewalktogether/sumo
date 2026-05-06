@@ -807,7 +807,7 @@ func StartGateway(configPath, version string, opts ...Options) (*Result, error) 
 		AuthToken:      cfg.Gateway.Auth.Token,
 		MetricsHandler: metrics.Handler(),
 		UIHandler:      gateway.NewUIHandler(cfg, version),
-		ChatHandler:    gateway.NewChatHandler(port),
+		ChatHandler:    gateway.NewChatHandler(port, version),
 		JobsHandler:    gateway.NewJobsHandler(port),
 		Settings: gateway.NewSettingsHandlers(cfg, toolReg, settingsBootstrap(bootstrapTracker), func(newCfg *config.Config) {
 			wsHandler.UpdateConfig(newCfg)
@@ -820,6 +820,8 @@ func StartGateway(configPath, version string, opts ...Options) (*Result, error) 
 			// rewrites cfg in place) is observed by the re-auth handler.
 			return cfg
 		}),
+		Export:    gateway.NewExportHandlers(sessionStore),
+		Translate: gateway.NewTranslateHandlers(wsHandler),
 		LogBuffer: logBuf,
 	})
 
