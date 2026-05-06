@@ -497,7 +497,44 @@ h2.role.you { color: #1f6f3f; }
 @media print {
     body { margin: 0.6in; max-width: none; }
     h2.role, .msg .bubble h1, .msg .bubble h2, .msg .bubble h3 { page-break-after: avoid; }
-    .msg, .msg .bubble pre, .msg .bubble table { page-break-inside: avoid; }
+    /* Preserve "don't split" only for SHORT blocks. Tables and code
+       blocks that exceed a page get page-break-inside: auto so the
+       browser breaks them across pages instead of pushing the whole
+       block past the page edge (which is what was clipping content). */
+    .msg, .msg .bubble table { page-break-inside: avoid; }
+    /* Critical: in print there's no scrollbar, so pre's
+       overflow-x:auto silently clips anything past the page width
+       (the "import { supabase } from '...'; // Pastikan Anda sudah inisi"
+       cut-mid-word bug). Force code lines to wrap so all content
+       reaches the page, even if mid-token wrapping is uglier than
+       the on-screen scrollable form. */
+    .msg .bubble pre,
+    .msg .bubble pre code {
+        white-space: pre-wrap !important;
+        word-wrap: break-word !important;
+        word-break: break-all !important;
+        overflow-wrap: anywhere !important;
+        overflow-x: visible !important;
+    }
+    /* Same problem for tables — overflow-x:auto becomes a clip in
+       print. Allow cells to wrap at any character so wide tables
+       fit the page width. */
+    .msg .bubble table {
+        display: table !important;
+        width: 100%% !important;
+        table-layout: fixed !important;
+        overflow: visible !important;
+    }
+    .msg .bubble th, .msg .bubble td {
+        overflow-wrap: anywhere !important;
+        word-break: break-word !important;
+    }
+    /* Long inline code inside paragraphs / list items also needs to
+       wrap — same clipping risk. */
+    .msg .bubble li, .msg .bubble p {
+        overflow-wrap: anywhere !important;
+        word-break: break-word !important;
+    }
 }
 </style>
 </head>

@@ -543,6 +543,24 @@ html.light #header .logo {
 	overflow-x: auto;
 	border-collapse: collapse;
 }
+.msg-translation ul, .msg-translation ol {
+	margin: 0.5em 0 0.5em 1.5em;
+	max-width: 100%%;
+	min-width: 0;
+}
+.msg-translation li {
+	margin-bottom: 0.25em;
+	min-width: 0;
+	max-width: 100%%;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+.msg-translation li code,
+.msg-translation p  code {
+	white-space: normal;
+	word-break: break-all;
+	overflow-wrap: anywhere;
+}
 .msg-translation-header {
 	display: flex;
 	align-items: center;
@@ -675,8 +693,32 @@ html.light #header .logo {
 }
 .msg.assistant .content ul, .msg.assistant .content ol {
 	margin: 0.5em 0 0.5em 1.5em;
+	/* Pin the list itself to the bubble width so a long inline
+	   <code> token (email, URL, file path) can't push the list
+	   wider than the bubble. */
+	max-width: 100%%;
+	min-width: 0;
 }
-.msg.assistant .content li { margin-bottom: 0.25em; }
+.msg.assistant .content li {
+	margin-bottom: 0.25em;
+	/* Same containment for each item — combined with parent's
+	   overflow-wrap: anywhere this lets long unbreakable tokens
+	   inside list items wrap at any character rather than blowing
+	   out the row. */
+	min-width: 0;
+	max-width: 100%%;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+/* Inline code inside list items: don't preserve whitespace,
+   wrap aggressively. (pre>code keeps the no-wrap rule above so
+   actual code blocks still scroll horizontally.) */
+.msg.assistant .content li code,
+.msg.assistant .content p  code {
+	white-space: normal;
+	word-break: break-all;
+	overflow-wrap: anywhere;
+}
 .msg.assistant .content table {
 	border-collapse: collapse;
 	margin: 0.5em 0;

@@ -439,6 +439,40 @@ func TestExport_MessageIndexOutOfRange(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "out of range")
 }
 
+// TestExport_HTMLPrintModeWrapsCodeAndTables catches the v0.1.10
+// regression where the PDF export clipped long code lines at the
+// right edge — `import { supabase } from './supabaseClient'; //`
+// got cut mid-word because chromedp's PrintToPDF can't render the
+// pre block's overflow-x:auto scrollbar. The fix is a print-mode
+// CSS override that switches code blocks to wrap and tables to
+// table-layout:fixed; both must appear inside the @media print
+// block of every served HTML export.
+func TestExport_HTMLPrintModeWrapsCodeAndTables(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	seedTestSession(t, store, "default", "k1", false)
+	h := NewExportHandlers(store)
+
+	req := httptest.NewRequest("GET",
+		"/api/session/export?agentId=default&sessionKey=k1&format=html", nil)
+	rec := httptest.NewRecorder()
+	h.Export(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+
+	// Must have the @media print block.
+	assert.Contains(t, body, "@media print")
+	// Must override pre's overflow + add a wrap directive in print.
+	for _, want := range []string{
+		"pre-wrap",
+		"break-all",
+		"overflow-wrap: anywhere",
+		"table-layout: fixed",
+	} {
+		assert.Contains(t, body, want,
+			"print-mode CSS must contain %q to keep PDFs from clipping wide content", want)
+	}
+}
+
 // TestExport_HTMLRendersMarkdownNotLiteral catches the regression
 // where the HTML / PDF export htmlEscape'd the raw markdown body
 // and the user's PDF showed **bold**, # headings, and | tables |
