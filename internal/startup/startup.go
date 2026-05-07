@@ -807,7 +807,13 @@ func StartGateway(configPath, version string, opts ...Options) (*Result, error) 
 		AuthToken:      cfg.Gateway.Auth.Token,
 		MetricsHandler: metrics.Handler(),
 		UIHandler:      gateway.NewUIHandler(cfg, version),
-		ChatHandler:    gateway.NewChatHandler(port, version),
+		ChatHandler: gateway.NewChatHandler(port, version, func() *config.Config {
+			// Closure rather than a snapshot so config hot-reload (Settings
+			// save) is observed by the next page render — the Chat tab's
+			// Translate toggle takes effect on next refresh, not on
+			// process restart.
+			return cfg
+		}),
 		JobsHandler:    gateway.NewJobsHandler(port),
 		Settings: gateway.NewSettingsHandlers(cfg, toolReg, settingsBootstrap(bootstrapTracker), func(newCfg *config.Config) {
 			wsHandler.UpdateConfig(newCfg)

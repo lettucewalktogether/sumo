@@ -49,35 +49,73 @@ var memoryTruncationNotice = fmt.Sprintf("\n\n[truncated — over %d KB total ag
 
 const defaultIdentityBase = `You are Felix, an AI agent. Conduct yourself professionally and politely. Be concise and direct. When executing tasks, think step by step and use your tools to accomplish the user's goals. When you need to call multiple independent tools to gather information, emit them in a single response (parallel tool calls) rather than waiting for each one — this cuts response latency on local models.`
 
-// webChatUICapabilities tells the model what the Felix web chat surface
-// can do. Without this the model falls back to its training-data
-// refusals ("I can't export to PDF / DOCX directly from this chat
-// interface, copy-paste it into a document editor instead") even though
-// the gateway has shipped real per-response Copy / Download / Translate
-// actions since v0.1.5. Appended unconditionally to every static
-// system prompt — phrased so it remains harmless when the user is on
-// the CLI channel.
-const webChatUICapabilities = `
+// PromptFlags toggles optional sections of the static system prompt
+// based on user-configurable feature flags. Lives in this package so
+// the gateway / builder can pass a single struct rather than
+// widening BuildStaticSystemPrompt's positional arg list every time
+// a new toggle ships.
+type PromptFlags struct {
+	// TranslateEnabled mirrors cfg.Chat.TranslateOn(). When false,
+	// the system prompt omits the Translate ▾ paragraph and the
+	// associated "never refuse to translate" instruction so the
+	// model doesn't promise a UI affordance the user has hidden.
+	TranslateEnabled bool
+}
+
+// DefaultPromptFlags returns flags with every feature on. Used by the
+// legacy BuildStaticSystemPrompt entry point so existing callers
+// (tests, ad-hoc builders) keep producing the v0.1.10 prompt
+// shape.
+func DefaultPromptFlags() PromptFlags {
+	return PromptFlags{TranslateEnabled: true}
+}
+
+// webChatUICapabilities returns the section of the static system
+// prompt that tells the model about the Felix web chat surface.
+// Without it the model falls back to its training-data refusals
+// ("I can't export to PDF / DOCX directly from this chat interface,
+// copy-paste it into a document editor instead") even though the
+// gateway has shipped real per-response Copy / Download / Translate
+// actions since v0.1.5. Phrased so it remains harmless when the
+// user is on the CLI channel.
+//
+// The Translate paragraph collapses to nothing when the user has
+// flipped off Settings → Chat → Translate, so the model stops
+// suggesting a button that no longer exists.
+func webChatUICapabilities(flags PromptFlags) string {
+	var translateBlock, translateRefusal string
+	if flags.TranslateEnabled {
+		translateBlock = `
+
+  - **Translate ▾** opens a list of 28 languages spanning Europe, Southeast Asia (Thai, Indonesian, Malay, Tamil, Khmer, Lao, Vietnamese, Filipino, Burmese, Javanese, Sundanese), East Asia, South Asia, MENA, and Africa. Click one and a translation streams back below the response in an amber-tinted panel — the original stays visible alongside the translation.`
+		translateRefusal = `, never tell them you cannot translate`
+	}
+
+	return `
 
 ## Felix web chat capabilities
 
 You may be talking to the user through the Felix web chat. That UI has features you must know about so you do not refuse requests it can fulfil:
 
-- **Action toolbar on every response**: Each response you generate has a row of three pill buttons at the bottom of the bubble: **Copy**, **Download ▾**, and **Translate ▾**. They appear automatically once you finish speaking — the user does not have to hover or click anything special.
+- **Action toolbar on every response**: Each response you generate has pill buttons at the bottom of the bubble: **Copy** and **Download ▾**` + (func() string {
+		if flags.TranslateEnabled {
+			return ", and **Translate ▾**"
+		}
+		return ""
+	}()) + `. They appear automatically once you finish speaking — the user does not have to hover or click anything special.
 
   - **Copy** puts the response markdown on the user's clipboard. It briefly flips to "Copied!" so they get feedback.
 
-  - **Download ▾** opens a small menu with three real, server-rendered file formats: **Save as PDF** (real .pdf rendered server-side via headless Chrome — not a print dialog), **Save as Word (.docx)** (editable Word document via pandoc), and **Save as Markdown** (plain markdown). Files are scoped to the current response and the user prompt that drove it.
+  - **Download ▾** opens a small menu with three real, server-rendered file formats: **Save as PDF** (real .pdf rendered server-side via headless Chrome — not a print dialog), **Save as Word (.docx)** (editable Word document via pandoc), and **Save as Markdown** (plain markdown). Files are scoped to the current response and the user prompt that drove it.` + translateBlock + `
 
-  - **Translate ▾** opens a list of 21 languages (English, Spanish, Vietnamese, Somali, Arabic, Swahili, French, Nepali, Burmese, Amharic, Chinese (Simplified / Traditional), Korean, Russian, Ukrainian, Portuguese, German, Hindi, Urdu, Tagalog, Japanese). Click one and a translation streams back below the response in an amber-tinted panel — the original stays visible alongside the translation.
-
-  **Never tell the user you cannot export to PDF, DOCX, or Markdown, never tell them to copy-paste the conversation into a document editor, and never tell them you cannot translate.** Instead, point at the pills: "Use the Download ▾ menu under my response and pick the format you want", "Click Translate ▾ under my response and pick a language", or "Click Copy under my response."
+  **Never tell the user you cannot export to PDF, DOCX, or Markdown, never tell them to copy-paste the conversation into a document editor` + translateRefusal + `.** Instead, point at the pills under your response.
 
 - **Sources Referenced card**: When your response cites URLs (markdown links or bare https://...), the chat renders them as a clickable chip card directly under the response. Cite sources naturally in your answer (markdown links preferred) and the UI surfaces them automatically.
 
 - **File attachments (multi-modal)**: Users can drag-and-drop, paste, or click the **+** button to attach images, PDFs, Word documents, plain-text and source files, and audio (mp3 / m4a / wav / webm / ogg / flac / aac). These flow through to you as native attachments where the provider supports them, or as extracted text otherwise. Do not say you cannot read files the user has already attached.
 
 - **Threads sidebar**: Conversations are saved automatically and listed in the left sidebar. Each row has a hover-only ⋮ menu with Rename, Pin, and Delete.`
+}
 
 // toolHints maps tool names to usage guidance injected into the default identity.
 var toolHints = map[string]string{
@@ -182,6 +220,28 @@ func BuildStaticSystemPrompt(
 	memoryIndex string,
 	memoryFiles string,
 ) string {
+	return BuildStaticSystemPromptWithFlags(
+		workspace, systemPrompt, agentID, agentName,
+		toolNames, configSummary, skillsIndex, memoryIndex, memoryFiles,
+		DefaultPromptFlags(),
+	)
+}
+
+// BuildStaticSystemPromptWithFlags is the v0.1.11+ entry point that
+// honours user-configurable feature flags (Settings → Chat
+// toggles). Existing callers can keep using BuildStaticSystemPrompt;
+// the runtime builder calls this variant with the live cfg flags so
+// disabling Translate also strips the matching system-prompt
+// paragraph and "never refuse to translate" instruction.
+func BuildStaticSystemPromptWithFlags(
+	workspace, systemPrompt, agentID, agentName string,
+	toolNames []string,
+	configSummary string,
+	skillsIndex string,
+	memoryIndex string,
+	memoryFiles string,
+	flags PromptFlags,
+) string {
 	var base string
 	if systemPrompt != "" {
 		base = systemPrompt
@@ -220,7 +280,7 @@ func BuildStaticSystemPrompt(
 	// instead of refusing on training-data assumptions. Harmless when
 	// the user is on the CLI channel — the section reads as background
 	// knowledge, not an instruction to act.
-	base += webChatUICapabilities
+	base += webChatUICapabilities(flags)
 
 	return base
 }

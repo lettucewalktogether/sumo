@@ -32,6 +32,7 @@ type Config struct {
 	WebSearch  WebSearchConfig           `json:"web_search"`
 	MCPServers []MCPServerConfig         `json:"mcp_servers"`
 	OTel       OTelConfig                `json:"otel"`
+	Chat       ChatConfig                `json:"chat"`
 
 	mu   sync.RWMutex
 	path string
@@ -41,6 +42,32 @@ type Config struct {
 	// UI's save-config endpoint can write back to disk WITHOUT persisting the
 	// runtime-only augmentation. Not JSON-serialized.
 	mcpAutoAddedNames []string
+}
+
+// ChatConfig holds web-chat UI feature toggles. Lives in the config
+// (rather than localStorage) so the gateway can decide what the
+// served HTML and the system prompt advertise — keeping the model's
+// view of the UI in sync with what the user actually sees.
+//
+// translateEnabled controls whether the per-response Translate ▾
+// pill renders (and whether the system prompt mentions translation).
+// Default: true. Users who don't translate can flip this off via
+// Settings → Chat to declutter the action toolbar and stop the
+// model from suggesting Translate.
+type ChatConfig struct {
+	TranslateEnabled *bool `json:"translateEnabled,omitempty"`
+}
+
+// TranslateOn returns the effective TranslateEnabled value with the
+// default-true semantics applied: nil pointer (field absent in
+// felix.json5) means "on", because that's how the feature shipped
+// before the toggle existed and we don't want a config migration to
+// silently disable it for upgraders. Explicit false stays false.
+func (c ChatConfig) TranslateOn() bool {
+	if c.TranslateEnabled == nil {
+		return true
+	}
+	return *c.TranslateEnabled
 }
 
 // TelegramConfig enables outbound Telegram messages via the send_message tool's

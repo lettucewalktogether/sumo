@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sausheong/felix/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +19,7 @@ import (
 // against accidentally deleting the file picker, drop zone, or chip
 // strip when refactoring the giant chatHTML constant.
 func TestNewChatHandlerServesAttachmentUI(t *testing.T) {
-	srv := httptest.NewServer(NewChatHandler(18789, "v0.6.3-22-g9486572"))
+	srv := httptest.NewServer(NewChatHandler(18789, "v0.6.3-22-g9486572", nil))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL)
@@ -175,5 +176,56 @@ func TestSanitizeVersionString(t *testing.T) {
 	for _, tc := range cases {
 		got := sanitizeVersionString(tc.in)
 		assert.Equal(t, tc.want, got, "input=%q", tc.in)
+	}
+}
+
+// TestNewChatHandlerInjectsTranslateFlag locks in the v0.1.11 Chat
+// settings toggle: NewChatHandler reads cfg.Chat.TranslateOn() per
+// request and injects it into the served HTML as a JS boolean
+// literal. When disabled, both the visible Translate ▾ pill (gated
+// on UI_FLAGS.translateEnabled) and the surrounding pill row code
+// branch must reflect the off state.
+func TestNewChatHandlerInjectsTranslateFlag(t *testing.T) {
+	off := false
+	on := true
+	cases := []struct {
+		name       string
+		cfg        *config.Config
+		wantToken  string // expected substring inside the served HTML
+	}{
+		{
+			name:      "default cfg (no Chat block) → translate on",
+			cfg:       &config.Config{},
+			wantToken: "translateEnabled: true",
+		},
+		{
+			name: "explicit on",
+			cfg: &config.Config{
+				Chat: config.ChatConfig{TranslateEnabled: &on},
+			},
+			wantToken: "translateEnabled: true",
+		},
+		{
+			name: "explicit off",
+			cfg: &config.Config{
+				Chat: config.ChatConfig{TranslateEnabled: &off},
+			},
+			wantToken: "translateEnabled: false",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			srv := httptest.NewServer(NewChatHandler(18789, "v0.1.11",
+				func() *config.Config { return cfg }))
+			defer srv.Close()
+			resp, err := http.Get(srv.URL)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			assert.Contains(t, string(body), tc.wantToken,
+				"served HTML must inject %q", tc.wantToken)
+		})
 	}
 }

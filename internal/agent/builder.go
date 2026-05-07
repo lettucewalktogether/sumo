@@ -137,10 +137,18 @@ func BuildRuntimeForAgent(deps RuntimeDeps, inputs RuntimeInputs, a *config.Agen
 		toolNames = inputs.Tools.Names()
 	}
 	memoryFiles := LoadAgentMemoryFiles(a.Workspace)
-	staticPrompt := BuildStaticSystemPrompt(
+	// Pull live Chat feature flags off the deps.Config so disabling
+	// Translate via Settings → Chat strips both the UI button AND the
+	// matching system-prompt paragraph on the next runtime build.
+	flags := DefaultPromptFlags()
+	if deps.Config != nil {
+		flags.TranslateEnabled = deps.Config.Chat.TranslateOn()
+	}
+	staticPrompt := BuildStaticSystemPromptWithFlags(
 		a.Workspace, a.SystemPrompt, a.ID, a.Name,
 		toolNames, configSummary, skillsIndex,
 		memoryIndex, memoryFiles,
+		flags,
 	)
 
 	// Strip the provider prefix off FallbackModel so the runtime hands

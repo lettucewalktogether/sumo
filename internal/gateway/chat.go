@@ -4,13 +4,20 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/sausheong/felix/internal/config"
 )
 
 // NewChatHandler returns an HTTP handler func that serves the chat web
 // interface. The version string is injected into the sidebar brand so
 // the running build is visible at a glance — sanitised through
 // sanitizeVersionString first since it ends up in raw HTML.
-func NewChatHandler(port int, version string) http.HandlerFunc {
+//
+// cfgFn is called per-request so config hot-reloads (Settings save,
+// fsnotify-driven felix.json5 edits) take effect on the next page
+// load without restarting the gateway. Pass `nil` for tests that
+// don't need feature flags — the handler falls back to defaults.
+func NewChatHandler(port int, version string, cfgFn func() *config.Config) http.HandlerFunc {
 	safeVersion := sanitizeVersionString(version)
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -24,8 +31,27 @@ func NewChatHandler(port int, version string) http.HandlerFunc {
 		// can run without being blocked. ws: / wss: stay for the
 		// chat WebSocket.
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data: blob:")
-		fmt.Fprintf(w, chatHTML, safeVersion, port)
+		// Resolve UI flags from config (or defaults if cfgFn is nil /
+		// returns nil). Encoded as boolean literals into the JS so
+		// the client can branch without a follow-up API call.
+		translateOn := true
+		if cfgFn != nil {
+			if cfg := cfgFn(); cfg != nil {
+				translateOn = cfg.Chat.TranslateOn()
+			}
+		}
+		fmt.Fprintf(w, chatHTML, safeVersion, port, jsBool(translateOn))
 	}
+}
+
+// jsBool emits "true" / "false" for inline injection into a JS
+// string — keeps the chatHTML template free of conditional Go
+// logic and makes the resulting HTML diff-friendly.
+func jsBool(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // sanitizeVersionString limits the version string to characters that
@@ -1681,6 +1707,13 @@ html.light #header .logo {
 <script>
 (function() {
 	var PORT = %d;
+	// UI feature flags from gateway config. Computed server-side at
+	// page-render time and injected as boolean literals so the client
+	// branches without an extra fetch round trip. Settings save +
+	// hot-reload re-renders the page on the next refresh.
+	var UI_FLAGS = {
+		translateEnabled: %s
+	};
 	var wsProto = (location.protocol === 'https:') ? 'wss://' : 'ws://';
 	var wsBase = wsProto + location.host + location.pathname.replace(/\/chat\/?$/, '');
 	var messagesEl = document.getElementById('messages');
@@ -2816,8 +2849,13 @@ html.light #header .logo {
 		// Download dropdown
 		bar.appendChild(buildDownloadDropdown(messageIndex));
 
-		// Translate dropdown
-		bar.appendChild(buildTranslateDropdown(messageIndex));
+		// Translate dropdown — gated on the server-side feature flag
+		// (Settings → Chat → Show Translate ▾ button on responses).
+		// When disabled, the toolbar collapses to Copy + Download only
+		// and the system prompt also stops mentioning translate.
+		if (UI_FLAGS.translateEnabled) {
+			bar.appendChild(buildTranslateDropdown(messageIndex));
+		}
 
 		return bar;
 	}

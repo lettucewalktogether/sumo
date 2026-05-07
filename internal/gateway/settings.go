@@ -558,6 +558,7 @@ html.dark .error-state { background: #450a0a; }
 				<button class="finger-tab" data-tab="gateway">Gateway</button>
 				<button class="finger-tab" data-tab="skills">Skills</button>
 				<button class="finger-tab" data-tab="memory">Memory</button>
+				<button class="finger-tab" data-tab="chat">Chat</button>
 			</div>
 			<div class="finger-panel active" id="panel-agents"></div>
 			<div class="finger-panel" id="panel-providers"></div>
@@ -569,6 +570,7 @@ html.dark .error-state { background: #450a0a; }
 			<div class="finger-panel" id="panel-gateway"></div>
 			<div class="finger-panel" id="panel-skills"></div>
 			<div class="finger-panel" id="panel-memory"></div>
+			<div class="finger-panel" id="panel-chat"></div>
 		</div>
 	</div>
 </div>
@@ -752,6 +754,7 @@ html.dark .error-state { background: #450a0a; }
 		renderGateway();
 		renderSkills();
 		renderMemory();
+		renderChat();
 	}
 
 	// === Models tab — talks directly to bundled Ollama via providers.local.base_url ===
@@ -792,6 +795,46 @@ html.dark .error-state { background: #450a0a; }
 		return n.toFixed(1) + ' ' + u[i];
 	}
 
+	// === Per-user "hide from my catalog" preference ===
+	//
+	// Stored in localStorage so it stays a personal-browser preference
+	// rather than a server-side config setting — the curated list and
+	// the install state itself stay shared / authoritative; the user
+	// only customises which entries surface visually for THEM. Other
+	// users (or future-self on a different browser) still see the
+	// full catalog by default. Models are hidden, never deleted: the
+	// pulled bytes stay on disk so a one-click Show restores them.
+	function loadHiddenModels() {
+		try {
+			var raw = localStorage.getItem('felix.hiddenModels');
+			if (!raw) return new Set();
+			var arr = JSON.parse(raw);
+			if (!Array.isArray(arr)) return new Set();
+			return new Set(arr);
+		} catch (_) { return new Set(); }
+	}
+	function saveHiddenModels(set) {
+		try {
+			localStorage.setItem('felix.hiddenModels', JSON.stringify(Array.from(set)));
+		} catch (_) {}
+	}
+	function hideModel(name) {
+		var s = loadHiddenModels();
+		s.add(name);
+		saveHiddenModels(s);
+		renderModels();
+	}
+	function unhideModel(name) {
+		var s = loadHiddenModels();
+		s.delete(name);
+		saveHiddenModels(s);
+		renderModels();
+	}
+	function unhideAllModels() {
+		saveHiddenModels(new Set());
+		renderModels();
+	}
+
 	function renderModels() {
 		var panel = document.getElementById('panel-models');
 		panel.innerHTML = '';
@@ -806,6 +849,8 @@ html.dark .error-state { background: #450a0a; }
 		p.style.cssText = 'color:var(--color-text-muted); font-size:0.85rem; margin:0.25rem 0 1rem 0;';
 		p.textContent = 'Endpoint: ' + ollamaBase();
 		section.appendChild(p);
+
+		var hidden = loadHiddenModels();
 
 		// Installed list
 		var installedHdr = document.createElement('div');
@@ -827,42 +872,63 @@ html.dark .error-state { background: #450a0a; }
 
 		var grid = document.createElement('div');
 		grid.style.cssText = 'display:grid; grid-template-columns:1fr; gap:0.75rem;';
+		var visibleCount = 0;
+		var hiddenCuratedCount = 0;
 		CURATED_MODELS.forEach(function(m) {
-			var card = document.createElement('div');
-			card.style.cssText = 'border:1px solid var(--color-border); border-radius:var(--radius); padding:0.75rem;';
-
-			var top = document.createElement('div');
-			top.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:0.5rem;';
-			var info = document.createElement('div');
-			var nameLine = document.createElement('div');
-			nameLine.style.cssText = 'font-weight:600;';
-			nameLine.textContent = m.label + ' (' + m.name + ')';
-			var sub = document.createElement('div');
-			sub.style.cssText = 'color:var(--color-text-muted); font-size:0.8rem;';
-			sub.textContent = m.size + ' • ' + m.note;
-			info.appendChild(nameLine);
-			info.appendChild(sub);
-
-			var btn = document.createElement('button');
-			btn.className = 'btn';
-			btn.dataset.model = m.name;
-			btn.textContent = 'Download';
-			btn.addEventListener('click', function() { startPull(m.name); });
-
-			top.appendChild(info);
-			top.appendChild(btn);
-			card.appendChild(top);
-
-			var prog = document.createElement('div');
-			prog.id = 'pull-progress-' + m.name;
-			prog.style.cssText = 'margin-top:0.5rem; display:none;';
-			prog.innerHTML = '<div style="font-size:0.8rem; color:var(--color-text-muted); margin-bottom:0.25rem;" class="progress-text">Starting…</div>' +
-				'<div style="height:6px; background:var(--color-border); border-radius:3px; overflow:hidden;"><div class="progress-bar" style="height:100%; width:0%; background:var(--color-accent, #3b82f6); transition:width 0.3s;"></div></div>';
-			card.appendChild(prog);
-
-			grid.appendChild(card);
+			if (hidden.has(m.name)) { hiddenCuratedCount++; return; }
+			visibleCount++;
+			grid.appendChild(buildCuratedCard(m));
 		});
+		if (visibleCount === 0) {
+			var emptyMsg = document.createElement('div');
+			emptyMsg.style.cssText = 'color:var(--color-text-muted); font-size:0.85rem; padding:0.75rem; border:1px dashed var(--color-border); border-radius:var(--radius);';
+			emptyMsg.textContent = 'Every catalog entry is hidden — use "Show all hidden models" below to bring them back.';
+			grid.appendChild(emptyMsg);
+		}
 		section.appendChild(grid);
+
+		// Hidden-models reveal section. Lists every model the user has
+		// dismissed (curated catalog AND installed) with a one-click
+		// Show. Collapsed by default so it doesn''t clutter the page
+		// when there''s nothing hidden.
+		if (hidden.size > 0) {
+			var hiddenSec = document.createElement('details');
+			hiddenSec.style.cssText = 'margin-top:1.5rem; border:1px solid var(--color-border); border-radius:var(--radius); padding:0.5rem 0.75rem;';
+			var summary = document.createElement('summary');
+			summary.style.cssText = 'cursor:pointer; font-weight:600; font-size:0.85rem; color:var(--color-text-muted); display:flex; justify-content:space-between; align-items:center; gap:0.5rem;';
+			summary.innerHTML = '<span>Hidden in your catalog (' + hidden.size + ')</span>';
+			var showAllBtn = document.createElement('button');
+			showAllBtn.className = 'btn';
+			showAllBtn.style.cssText = 'padding:0.2rem 0.55rem; font-size:0.75rem;';
+			showAllBtn.textContent = 'Show all';
+			showAllBtn.addEventListener('click', function(e) {
+				e.preventDefault();
+				e.stopPropagation();
+				unhideAllModels();
+			});
+			summary.appendChild(showAllBtn);
+			hiddenSec.appendChild(summary);
+
+			var list = document.createElement('div');
+			list.style.cssText = 'margin-top:0.6rem; display:flex; flex-direction:column; gap:0.3rem;';
+			Array.from(hidden).sort().forEach(function(name) {
+				var row = document.createElement('div');
+				row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:0.5rem; padding:0.35rem 0.45rem; background:var(--color-bg); border-radius:var(--radius); font-size:0.8rem;';
+				var nm = document.createElement('span');
+				nm.style.cssText = 'flex:1; min-width:0; word-break:break-all; color:var(--color-text-muted); font-family:"SF Mono", Menlo, monospace;';
+				nm.textContent = name;
+				var showBtn = document.createElement('button');
+				showBtn.className = 'btn';
+				showBtn.style.cssText = 'padding:0.2rem 0.55rem; font-size:0.75rem;';
+				showBtn.textContent = 'Show';
+				showBtn.addEventListener('click', function() { unhideModel(name); });
+				row.appendChild(nm);
+				row.appendChild(showBtn);
+				list.appendChild(row);
+			});
+			hiddenSec.appendChild(list);
+			section.appendChild(hiddenSec);
+		}
 
 		panel.appendChild(section);
 
@@ -870,6 +936,59 @@ html.dark .error-state { background: #450a0a; }
 		refreshBootstrap();
 		// Apply any in-flight pull state in case the user switched tabs and back.
 		Object.keys(pullState).forEach(function(name) { applyPullState(name); });
+	}
+
+	// buildCuratedCard renders one Available-to-download entry. Carries
+	// a small × in the top-right that adds the model to the per-user
+	// hidden set — keeps the card off the catalog without touching
+	// what's installed on disk or what other users see.
+	function buildCuratedCard(m) {
+		var card = document.createElement('div');
+		card.style.cssText = 'border:1px solid var(--color-border); border-radius:var(--radius); padding:0.75rem; position:relative;';
+
+		// Hide × — top-right corner, hover-revealed on the card itself
+		// to avoid distracting from the primary Download CTA.
+		var hideBtn = document.createElement('button');
+		hideBtn.type = 'button';
+		hideBtn.title = 'Hide from my catalog (does not delete; you can show it again from the Hidden section below)';
+		hideBtn.setAttribute('aria-label', 'Hide ' + m.label + ' from my catalog');
+		hideBtn.style.cssText = 'position:absolute; top:0.35rem; right:0.4rem; width:22px; height:22px; padding:0; line-height:1; background:transparent; border:1px solid transparent; border-radius:4px; color:var(--color-text-muted); font-size:1rem; cursor:pointer;';
+		hideBtn.textContent = '×';
+		hideBtn.addEventListener('mouseover', function() { hideBtn.style.borderColor = 'var(--color-border)'; hideBtn.style.color = 'var(--color-text)'; });
+		hideBtn.addEventListener('mouseout',  function() { hideBtn.style.borderColor = 'transparent'; hideBtn.style.color = 'var(--color-text-muted)'; });
+		hideBtn.addEventListener('click', function() { hideModel(m.name); });
+		card.appendChild(hideBtn);
+
+		var top = document.createElement('div');
+		top.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:0.5rem; padding-right:1.4rem;';
+		var info = document.createElement('div');
+		var nameLine = document.createElement('div');
+		nameLine.style.cssText = 'font-weight:600;';
+		nameLine.textContent = m.label + ' (' + m.name + ')';
+		var sub = document.createElement('div');
+		sub.style.cssText = 'color:var(--color-text-muted); font-size:0.8rem;';
+		sub.textContent = m.size + ' • ' + m.note;
+		info.appendChild(nameLine);
+		info.appendChild(sub);
+
+		var btn = document.createElement('button');
+		btn.className = 'btn';
+		btn.dataset.model = m.name;
+		btn.textContent = 'Download';
+		btn.addEventListener('click', function() { startPull(m.name); });
+
+		top.appendChild(info);
+		top.appendChild(btn);
+		card.appendChild(top);
+
+		var prog = document.createElement('div');
+		prog.id = 'pull-progress-' + m.name;
+		prog.style.cssText = 'margin-top:0.5rem; display:none;';
+		prog.innerHTML = '<div style="font-size:0.8rem; color:var(--color-text-muted); margin-bottom:0.25rem;" class="progress-text">Starting…</div>' +
+			'<div style="height:6px; background:var(--color-border); border-radius:3px; overflow:hidden;"><div class="progress-bar" style="height:100%; width:0%; background:var(--color-accent, #3b82f6); transition:width 0.3s;"></div></div>';
+		card.appendChild(prog);
+
+		return card;
 	}
 
 	// === First-run bootstrap polling — surface auto-pulls so users see progress ===
@@ -919,6 +1038,7 @@ html.dark .error-state { background: #450a0a; }
 	function refreshInstalled() {
 		var box = document.getElementById('models-installed');
 		if (!box) return;
+		var hidden = loadHiddenModels();
 		fetch(ollamaBase() + '/api/tags')
 			.then(function(r) { return r.json(); })
 			.then(function(data) {
@@ -927,8 +1047,16 @@ html.dark .error-state { background: #450a0a; }
 					box.textContent = 'No models installed yet.';
 					return;
 				}
+				// Hidden installed models stay on disk but drop out of
+				// the visible list — they remain reachable via the
+				// "Hidden in your catalog" reveal section below.
+				var visible = models.filter(function(m) { return !hidden.has(m.name); });
+				if (visible.length === 0) {
+					box.textContent = 'Every installed model is hidden — use "Show all hidden models" below.';
+					return;
+				}
 				box.innerHTML = '';
-				models.forEach(function(m) {
+				visible.forEach(function(m) {
 					var row = document.createElement('div');
 					row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:0.5rem; padding:0.4rem 0.25rem; border-bottom:1px solid var(--color-border);';
 					var nm = document.createElement('div');
@@ -937,13 +1065,24 @@ html.dark .error-state { background: #450a0a; }
 					var sz = document.createElement('div');
 					sz.style.cssText = 'color:var(--color-text-muted); font-size:0.85rem;';
 					sz.textContent = fmtBytes(m.size);
+					// Hide button — same per-user dismissal as the
+					// curated catalog. Keeps the bytes on disk so a
+					// re-show is instant; doesn''t hit /api/delete.
+					var hideBtn = document.createElement('button');
+					hideBtn.className = 'btn';
+					hideBtn.textContent = 'Hide';
+					hideBtn.title = 'Hide from my catalog (does not delete; click "Show" in the Hidden section to bring it back)';
+					hideBtn.style.cssText = 'padding:0.25rem 0.6rem; font-size:0.8rem;';
+					hideBtn.addEventListener('click', function() { hideModel(m.name); });
 					var rm = document.createElement('button');
 					rm.className = 'btn';
 					rm.textContent = 'Remove';
+					rm.title = 'Permanently delete from the bundled Ollama store (frees disk space)';
 					rm.style.cssText = 'padding:0.25rem 0.6rem; font-size:0.8rem;';
 					rm.addEventListener('click', function() { removeInstalledModel(m.name); });
 					row.appendChild(nm);
 					row.appendChild(sz);
+					row.appendChild(hideBtn);
 					row.appendChild(rm);
 					box.appendChild(row);
 				});
@@ -2178,6 +2317,39 @@ html.dark .error-state { background: #450a0a; }
 		});
 	}
 	function escapeAttr(s) { return escapeHtml(s); }
+
+	// === Chat tab — web-chat UI feature toggles ===
+	function renderChat() {
+		var panel = document.getElementById('panel-chat');
+		panel.innerHTML = '';
+		var sec = makeSection(panel, 'Chat UI');
+
+		var help = document.createElement('p');
+		help.style.cssText = 'color:var(--color-text-muted); font-size:0.85rem; margin:0 0 1rem 0;';
+		help.innerHTML = 'Toggle individual web-chat features. Saved preferences ' +
+			'flow through to both the rendered UI (button visibility) and the ' +
+			'agent system prompt (so the model stops suggesting features you have hidden). ' +
+			'Takes effect on the next chat refresh.';
+		sec.appendChild(help);
+
+		if (!cfg.chat) cfg.chat = {};
+		// translateEnabled defaults to true for upgraders who never had
+		// the toggle. Match the Go-side TranslateOn() semantics.
+		var translateOn = (cfg.chat.translateEnabled !== false);
+
+		makeToggle(sec, 'Show Translate ▾ button on responses', translateOn, function(v) {
+			if (!cfg.chat) cfg.chat = {};
+			cfg.chat.translateEnabled = v;
+		});
+
+		var transHelp = document.createElement('div');
+		transHelp.className = 'field-help';
+		transHelp.innerHTML = 'When off: the Translate pill disappears from every response, ' +
+			'and the agent stops mentioning translation in its replies. ' +
+			'<code>POST /api/translate</code> still works for scripts that hit it directly. ' +
+			'Useful if you only chat in one language and want a tighter toolbar.';
+		sec.appendChild(transHelp);
+	}
 
 	// === Memory tab ===
 	var memoryEditing = null; // currently-editing id, or null when in list mode

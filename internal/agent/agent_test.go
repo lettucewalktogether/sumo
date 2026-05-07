@@ -122,6 +122,35 @@ func TestStaticSystemPromptIncludesWebChatCapabilities(t *testing.T) {
 	assert.Contains(t, customPrompt, "Felix web chat capabilities")
 }
 
+// TestStaticSystemPromptOmitsTranslateWhenDisabled locks in the
+// v0.1.11 Settings → Chat → Translate toggle: when the user flips
+// Translate off, the system prompt must drop both the "Translate ▾"
+// paragraph AND the "never refuse to translate" instruction so the
+// model stops suggesting a button that no longer renders. Other
+// capability paragraphs (Copy, Download, Sources, attachments)
+// must stay intact regardless of the toggle.
+func TestStaticSystemPromptOmitsTranslateWhenDisabled(t *testing.T) {
+	dir := t.TempDir()
+
+	off := BuildStaticSystemPromptWithFlags(dir, "", "agent", "Agent",
+		nil, "", "", "", "",
+		PromptFlags{TranslateEnabled: false})
+	assert.NotContains(t, off, "Translate ▾",
+		"Translate paragraph must vanish when the user disables it")
+	assert.NotContains(t, off, "never tell them you cannot translate",
+		"Translate refusal-guard must vanish too")
+	// Other capability sections stay.
+	assert.Contains(t, off, "Save as PDF")
+	assert.Contains(t, off, "Sources Referenced")
+	assert.Contains(t, off, "File attachments")
+
+	on := BuildStaticSystemPromptWithFlags(dir, "", "agent", "Agent",
+		nil, "", "", "", "",
+		PromptFlags{TranslateEnabled: true})
+	assert.Contains(t, on, "Translate ▾")
+	assert.Contains(t, on, "never tell them you cannot translate")
+}
+
 // --- assembleMessages tests ---
 
 func TestAssembleMessagesUserAndAssistant(t *testing.T) {
