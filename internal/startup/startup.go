@@ -817,6 +817,14 @@ func StartGateway(configPath, version string, opts ...Options) (*Result, error) 
 		JobsHandler:    gateway.NewJobsHandler(port),
 		Settings: gateway.NewSettingsHandlers(cfg, toolReg, settingsBootstrap(bootstrapTracker), func(newCfg *config.Config) {
 			wsHandler.UpdateConfig(newCfg)
+			// Force-unload any newly-deactivated models from Ollama RAM
+			// so the user-felt RAM reclaim happens immediately rather
+			// than waiting on Ollama's idle eviction (default 5 min).
+			// Best-effort — failures are logged inside the helper, not
+			// surfaced to the Settings save UI, because the
+			// block-from-use safety net (chat.send pre-flight check)
+			// already made the deactivation effective.
+			go wsHandler.EvictDeactivatedFromOllama(context.Background())
 			slog.Info("config updated via settings page")
 		}),
 		Skills:    skillHandlers,

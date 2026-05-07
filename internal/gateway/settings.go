@@ -795,43 +795,42 @@ html.dark .error-state { background: #450a0a; }
 		return n.toFixed(1) + ' ' + u[i];
 	}
 
-	// === Per-user "hide from my catalog" preference ===
+	// === Server-side Deactivate (v0.1.12) ===
 	//
-	// Stored in localStorage so it stays a personal-browser preference
-	// rather than a server-side config setting — the curated list and
-	// the install state itself stay shared / authoritative; the user
-	// only customises which entries surface visually for THEM. Other
-	// users (or future-self on a different browser) still see the
-	// full catalog by default. Models are hidden, never deleted: the
-	// pulled bytes stay on disk so a one-click Show restores them.
-	function loadHiddenModels() {
-		try {
-			var raw = localStorage.getItem('felix.hiddenModels');
-			if (!raw) return new Set();
-			var arr = JSON.parse(raw);
-			if (!Array.isArray(arr)) return new Set();
-			return new Set(arr);
-		} catch (_) { return new Set(); }
+	// Replaces the v0.1.11 localStorage Hide. Deactivation is a real
+	// server-side config flag (cfg.models.deactivated) so:
+	//   - All browsers see the same answer to "is model X usable?"
+	//   - chat.send refuses to invoke deactivated models with a clear
+	//     error (the block-from-use safety net)
+	//   - Settings save fires a one-shot Ollama unload so the RAM is
+	//     reclaimed immediately instead of waiting Ollama's 5-min
+	//     idle eviction
+	//
+	// Operates on the same in-memory cfg the Save button persists.
+	// Calling render() re-paints with the new state; the actual
+	// disk write + unload happen when the user clicks Save.
+	function isModelDeactivated(name) {
+		if (!cfg.models || !Array.isArray(cfg.models.deactivated)) return false;
+		return cfg.models.deactivated.indexOf(name) !== -1;
 	}
-	function saveHiddenModels(set) {
-		try {
-			localStorage.setItem('felix.hiddenModels', JSON.stringify(Array.from(set)));
-		} catch (_) {}
-	}
-	function hideModel(name) {
-		var s = loadHiddenModels();
-		s.add(name);
-		saveHiddenModels(s);
+	function deactivateModel(name) {
+		if (!cfg.models) cfg.models = {};
+		if (!Array.isArray(cfg.models.deactivated)) cfg.models.deactivated = [];
+		if (cfg.models.deactivated.indexOf(name) === -1) {
+			cfg.models.deactivated.push(name);
+		}
 		renderModels();
 	}
-	function unhideModel(name) {
-		var s = loadHiddenModels();
-		s.delete(name);
-		saveHiddenModels(s);
+	function reactivateModel(name) {
+		if (!cfg.models || !Array.isArray(cfg.models.deactivated)) return;
+		cfg.models.deactivated = cfg.models.deactivated.filter(function(n) {
+			return n !== name;
+		});
 		renderModels();
 	}
-	function unhideAllModels() {
-		saveHiddenModels(new Set());
+	function reactivateAllModels() {
+		if (!cfg.models) return;
+		cfg.models.deactivated = [];
 		renderModels();
 	}
 
@@ -850,7 +849,7 @@ html.dark .error-state { background: #450a0a; }
 		p.textContent = 'Endpoint: ' + ollamaBase();
 		section.appendChild(p);
 
-		var hidden = loadHiddenModels();
+		var deactList = (cfg.models && Array.isArray(cfg.models.deactivated)) ? cfg.models.deactivated.slice() : [];
 
 		// Installed list
 		var installedHdr = document.createElement('div');
@@ -872,62 +871,61 @@ html.dark .error-state { background: #450a0a; }
 
 		var grid = document.createElement('div');
 		grid.style.cssText = 'display:grid; grid-template-columns:1fr; gap:0.75rem;';
-		var visibleCount = 0;
-		var hiddenCuratedCount = 0;
 		CURATED_MODELS.forEach(function(m) {
-			if (hidden.has(m.name)) { hiddenCuratedCount++; return; }
-			visibleCount++;
 			grid.appendChild(buildCuratedCard(m));
 		});
-		if (visibleCount === 0) {
-			var emptyMsg = document.createElement('div');
-			emptyMsg.style.cssText = 'color:var(--color-text-muted); font-size:0.85rem; padding:0.75rem; border:1px dashed var(--color-border); border-radius:var(--radius);';
-			emptyMsg.textContent = 'Every catalog entry is hidden — use "Show all hidden models" below to bring them back.';
-			grid.appendChild(emptyMsg);
-		}
 		section.appendChild(grid);
 
-		// Hidden-models reveal section. Lists every model the user has
-		// dismissed (curated catalog AND installed) with a one-click
-		// Show. Collapsed by default so it doesn''t clutter the page
-		// when there''s nothing hidden.
-		if (hidden.size > 0) {
-			var hiddenSec = document.createElement('details');
-			hiddenSec.style.cssText = 'margin-top:1.5rem; border:1px solid var(--color-border); border-radius:var(--radius); padding:0.5rem 0.75rem;';
+		// Deactivated-models reveal section. Lists every model the
+		// user has marked dormant (curated catalog AND installed)
+		// with a one-click Reactivate. Collapsed by default so it
+		// doesn''t clutter the page when nothing is deactivated.
+		// Note: changes are staged on the in-memory cfg; the actual
+		// disk write + Ollama unload happen on Save.
+		if (deactList.length > 0) {
+			var deactSec = document.createElement('details');
+			deactSec.style.cssText = 'margin-top:1.5rem; border:1px solid var(--color-border); border-radius:var(--radius); padding:0.5rem 0.75rem;';
 			var summary = document.createElement('summary');
 			summary.style.cssText = 'cursor:pointer; font-weight:600; font-size:0.85rem; color:var(--color-text-muted); display:flex; justify-content:space-between; align-items:center; gap:0.5rem;';
-			summary.innerHTML = '<span>Hidden in your catalog (' + hidden.size + ')</span>';
-			var showAllBtn = document.createElement('button');
-			showAllBtn.className = 'btn';
-			showAllBtn.style.cssText = 'padding:0.2rem 0.55rem; font-size:0.75rem;';
-			showAllBtn.textContent = 'Show all';
-			showAllBtn.addEventListener('click', function(e) {
+			summary.innerHTML = '<span>Deactivated models (' + deactList.length + ')</span>';
+			var reactAllBtn = document.createElement('button');
+			reactAllBtn.className = 'btn';
+			reactAllBtn.style.cssText = 'padding:0.2rem 0.55rem; font-size:0.75rem;';
+			reactAllBtn.textContent = 'Reactivate all';
+			reactAllBtn.addEventListener('click', function(e) {
 				e.preventDefault();
 				e.stopPropagation();
-				unhideAllModels();
+				reactivateAllModels();
 			});
-			summary.appendChild(showAllBtn);
-			hiddenSec.appendChild(summary);
+			summary.appendChild(reactAllBtn);
+			deactSec.appendChild(summary);
+
+			var note = document.createElement('div');
+			note.style.cssText = 'margin-top:0.5rem; font-size:0.75rem; color:var(--color-text-muted); line-height:1.5;';
+			note.innerHTML = 'Deactivated models are <strong>blocked from use</strong> — any agent that tries to call one gets a clear error. ' +
+				'On Save, deactivated models are also <strong>evicted from Ollama RAM</strong> immediately so the active model gets the headroom back. ' +
+				'Files stay on disk; Reactivate is a one-click toggle.';
+			deactSec.appendChild(note);
 
 			var list = document.createElement('div');
 			list.style.cssText = 'margin-top:0.6rem; display:flex; flex-direction:column; gap:0.3rem;';
-			Array.from(hidden).sort().forEach(function(name) {
+			deactList.slice().sort().forEach(function(name) {
 				var row = document.createElement('div');
 				row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:0.5rem; padding:0.35rem 0.45rem; background:var(--color-bg); border-radius:var(--radius); font-size:0.8rem;';
 				var nm = document.createElement('span');
 				nm.style.cssText = 'flex:1; min-width:0; word-break:break-all; color:var(--color-text-muted); font-family:"SF Mono", Menlo, monospace;';
 				nm.textContent = name;
-				var showBtn = document.createElement('button');
-				showBtn.className = 'btn';
-				showBtn.style.cssText = 'padding:0.2rem 0.55rem; font-size:0.75rem;';
-				showBtn.textContent = 'Show';
-				showBtn.addEventListener('click', function() { unhideModel(name); });
+				var reactBtn = document.createElement('button');
+				reactBtn.className = 'btn';
+				reactBtn.style.cssText = 'padding:0.2rem 0.55rem; font-size:0.75rem;';
+				reactBtn.textContent = 'Reactivate';
+				reactBtn.addEventListener('click', function() { reactivateModel(name); });
 				row.appendChild(nm);
-				row.appendChild(showBtn);
+				row.appendChild(reactBtn);
 				list.appendChild(row);
 			});
-			hiddenSec.appendChild(list);
-			section.appendChild(hiddenSec);
+			deactSec.appendChild(list);
+			section.appendChild(deactSec);
 		}
 
 		panel.appendChild(section);
@@ -938,26 +936,41 @@ html.dark .error-state { background: #450a0a; }
 		Object.keys(pullState).forEach(function(name) { applyPullState(name); });
 	}
 
-	// buildCuratedCard renders one Available-to-download entry. Carries
-	// a small × in the top-right that adds the model to the per-user
-	// hidden set — keeps the card off the catalog without touching
-	// what's installed on disk or what other users see.
+	// buildCuratedCard renders one Available-to-download entry.
+	// Deactivated cards render as a dimmed strip with a Reactivate
+	// link; live cards have a Deactivate × in the top-right that
+	// stages the deactivation on cfg.models.deactivated (Save
+	// persists it AND fires the Ollama unload).
 	function buildCuratedCard(m) {
+		var deactivated = isModelDeactivated(m.name);
 		var card = document.createElement('div');
-		card.style.cssText = 'border:1px solid var(--color-border); border-radius:var(--radius); padding:0.75rem; position:relative;';
+		card.style.cssText = 'border:1px solid var(--color-border); border-radius:var(--radius); padding:0.75rem; position:relative;' +
+			(deactivated ? ' opacity:0.55; background:repeating-linear-gradient(45deg, transparent, transparent 8px, var(--color-bg) 8px, var(--color-bg) 12px);' : '');
 
-		// Hide × — top-right corner, hover-revealed on the card itself
-		// to avoid distracting from the primary Download CTA.
-		var hideBtn = document.createElement('button');
-		hideBtn.type = 'button';
-		hideBtn.title = 'Hide from my catalog (does not delete; you can show it again from the Hidden section below)';
-		hideBtn.setAttribute('aria-label', 'Hide ' + m.label + ' from my catalog');
-		hideBtn.style.cssText = 'position:absolute; top:0.35rem; right:0.4rem; width:22px; height:22px; padding:0; line-height:1; background:transparent; border:1px solid transparent; border-radius:4px; color:var(--color-text-muted); font-size:1rem; cursor:pointer;';
-		hideBtn.textContent = '×';
-		hideBtn.addEventListener('mouseover', function() { hideBtn.style.borderColor = 'var(--color-border)'; hideBtn.style.color = 'var(--color-text)'; });
-		hideBtn.addEventListener('mouseout',  function() { hideBtn.style.borderColor = 'transparent'; hideBtn.style.color = 'var(--color-text-muted)'; });
-		hideBtn.addEventListener('click', function() { hideModel(m.name); });
-		card.appendChild(hideBtn);
+		// Top-right action: Deactivate × on live cards, Reactivate
+		// link on dimmed cards. Stays subtle so it doesn''t compete
+		// with the primary Download CTA.
+		var actBtn = document.createElement('button');
+		actBtn.type = 'button';
+		actBtn.style.cssText = 'position:absolute; top:0.35rem; right:0.4rem; padding:0.15rem 0.5rem; line-height:1; background:transparent; border:1px solid transparent; border-radius:4px; color:var(--color-text-muted); font-size:0.75rem; cursor:pointer;';
+		if (deactivated) {
+			actBtn.textContent = 'Reactivate';
+			actBtn.title = 'Re-enable this model. Save to persist; the next chat.send call will be allowed.';
+			actBtn.setAttribute('aria-label', 'Reactivate ' + m.label);
+			actBtn.addEventListener('click', function() { reactivateModel(m.name); });
+		} else {
+			actBtn.style.width = '22px';
+			actBtn.style.height = '22px';
+			actBtn.style.padding = '0';
+			actBtn.style.fontSize = '1rem';
+			actBtn.textContent = '×';
+			actBtn.title = 'Deactivate (block agents from using it; Save evicts from Ollama RAM if loaded). Not a delete — files stay on disk.';
+			actBtn.setAttribute('aria-label', 'Deactivate ' + m.label);
+			actBtn.addEventListener('click', function() { deactivateModel(m.name); });
+		}
+		actBtn.addEventListener('mouseover', function() { actBtn.style.borderColor = 'var(--color-border)'; actBtn.style.color = 'var(--color-text)'; });
+		actBtn.addEventListener('mouseout',  function() { actBtn.style.borderColor = 'transparent'; actBtn.style.color = 'var(--color-text-muted)'; });
+		card.appendChild(actBtn);
 
 		var top = document.createElement('div');
 		top.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:0.5rem; padding-right:1.4rem;';
@@ -1038,7 +1051,6 @@ html.dark .error-state { background: #450a0a; }
 	function refreshInstalled() {
 		var box = document.getElementById('models-installed');
 		if (!box) return;
-		var hidden = loadHiddenModels();
 		fetch(ollamaBase() + '/api/tags')
 			.then(function(r) { return r.json(); })
 			.then(function(data) {
@@ -1047,33 +1059,41 @@ html.dark .error-state { background: #450a0a; }
 					box.textContent = 'No models installed yet.';
 					return;
 				}
-				// Hidden installed models stay on disk but drop out of
-				// the visible list — they remain reachable via the
-				// "Hidden in your catalog" reveal section below.
-				var visible = models.filter(function(m) { return !hidden.has(m.name); });
-				if (visible.length === 0) {
-					box.textContent = 'Every installed model is hidden — use "Show all hidden models" below.';
-					return;
-				}
 				box.innerHTML = '';
-				visible.forEach(function(m) {
+				models.forEach(function(m) {
+					var deactivated = isModelDeactivated(m.name);
 					var row = document.createElement('div');
-					row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:0.5rem; padding:0.4rem 0.25rem; border-bottom:1px solid var(--color-border);';
+					row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:0.5rem; padding:0.4rem 0.25rem; border-bottom:1px solid var(--color-border);' +
+						(deactivated ? ' opacity:0.55;' : '');
 					var nm = document.createElement('div');
 					nm.style.cssText = 'flex:1; min-width:0; word-break:break-all;';
-					nm.textContent = m.name;
+					if (deactivated) {
+						nm.innerHTML = escapeHtml(m.name) +
+							' <span style="font-size:0.7rem; padding:0.05rem 0.4rem; background:var(--color-bg); border:1px solid var(--color-border); border-radius:4px; margin-left:0.4rem; vertical-align:middle; color:var(--color-text-muted);">deactivated</span>';
+					} else {
+						nm.textContent = m.name;
+					}
 					var sz = document.createElement('div');
 					sz.style.cssText = 'color:var(--color-text-muted); font-size:0.85rem;';
 					sz.textContent = fmtBytes(m.size);
-					// Hide button — same per-user dismissal as the
-					// curated catalog. Keeps the bytes on disk so a
-					// re-show is instant; doesn''t hit /api/delete.
-					var hideBtn = document.createElement('button');
-					hideBtn.className = 'btn';
-					hideBtn.textContent = 'Hide';
-					hideBtn.title = 'Hide from my catalog (does not delete; click "Show" in the Hidden section to bring it back)';
-					hideBtn.style.cssText = 'padding:0.25rem 0.6rem; font-size:0.8rem;';
-					hideBtn.addEventListener('click', function() { hideModel(m.name); });
+
+					// Deactivate / Reactivate toggle. On Save, the
+					// gateway also fires a one-shot Ollama unload for
+					// every freshly-deactivated model so the RAM is
+					// reclaimed immediately.
+					var toggleBtn = document.createElement('button');
+					toggleBtn.className = 'btn';
+					toggleBtn.style.cssText = 'padding:0.25rem 0.6rem; font-size:0.8rem;';
+					if (deactivated) {
+						toggleBtn.textContent = 'Reactivate';
+						toggleBtn.title = 'Re-enable this model. Save to persist; the next chat.send call will be allowed.';
+						toggleBtn.addEventListener('click', function() { reactivateModel(m.name); });
+					} else {
+						toggleBtn.textContent = 'Deactivate';
+						toggleBtn.title = 'Block agents from using it. On Save, also evicts from Ollama RAM if loaded. Not a delete — files stay on disk.';
+						toggleBtn.addEventListener('click', function() { deactivateModel(m.name); });
+					}
+
 					var rm = document.createElement('button');
 					rm.className = 'btn';
 					rm.textContent = 'Remove';
@@ -1082,7 +1102,7 @@ html.dark .error-state { background: #450a0a; }
 					rm.addEventListener('click', function() { removeInstalledModel(m.name); });
 					row.appendChild(nm);
 					row.appendChild(sz);
-					row.appendChild(hideBtn);
+					row.appendChild(toggleBtn);
 					row.appendChild(rm);
 					box.appendChild(row);
 				});

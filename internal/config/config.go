@@ -33,6 +33,7 @@ type Config struct {
 	MCPServers []MCPServerConfig         `json:"mcp_servers"`
 	OTel       OTelConfig                `json:"otel"`
 	Chat       ChatConfig                `json:"chat"`
+	Models     ModelsConfig              `json:"models"`
 
 	mu   sync.RWMutex
 	path string
@@ -42,6 +43,37 @@ type Config struct {
 	// UI's save-config endpoint can write back to disk WITHOUT persisting the
 	// runtime-only augmentation. Not JSON-serialized.
 	mcpAutoAddedNames []string
+}
+
+// ModelsConfig holds gateway-wide model state. Today: a list of
+// model identifiers the user has marked as "deactivated" — those
+// models are blocked from chat.send (returns a friendly error
+// instead of silently loading them) AND, if currently loaded into
+// Ollama's RAM, evicted via a one-shot keep_alive=0 unload at the
+// moment of deactivation. Lives server-side (rather than in
+// localStorage like the v0.1.11 Hide affordance) because it
+// affects agent behavior — every browser must see the same answer
+// to "is model X usable right now?"
+//
+// Names are matched verbatim against the model id used in
+// `provider/model` strings; for the bundled-Ollama path that is
+// the bare Ollama tag (e.g. "aisingapore/Gemma-SEA-LION-v4-27B-IT"
+// or "gemma4:latest"). For cloud providers it is the bare model
+// name without the provider prefix (e.g. "claude-sonnet-4-5").
+type ModelsConfig struct {
+	Deactivated []string `json:"deactivated,omitempty"`
+}
+
+// IsDeactivated reports whether a bare model id is in the
+// deactivated list. Comparison is exact — the caller must strip
+// the provider prefix first via llm.ParseProviderModel.
+func (m ModelsConfig) IsDeactivated(model string) bool {
+	for _, d := range m.Deactivated {
+		if d == model {
+			return true
+		}
+	}
+	return false
 }
 
 // ChatConfig holds web-chat UI feature toggles. Lives in the config

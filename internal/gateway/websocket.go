@@ -515,15 +515,33 @@ func (h *WebSocketHandler) handleChatSend(conn *websocket.Conn, req JSONRPCReque
 
 	// Resolve LLM provider — read under RLock so a concurrent UpdateProviders
 	// (triggered by a Settings save / config hot-reload) can't tear the map.
-	providerName, _ := llm.ParseProviderModel(agentCfg.Model)
+	providerName, modelName := llm.ParseProviderModel(agentCfg.Model)
 	h.mu.RLock()
 	provider, ok := h.providers[providerName]
+	deactivated := h.config.Models.IsDeactivated(modelName)
 	h.mu.RUnlock()
 	if !ok {
 		writeJSON(conn, JSONRPCResponse{
 			JSONRPC: "2.0",
 			Error:   map[string]any{"code": -32603, "message": "LLM provider not configured: " + providerName},
 			ID:      req.ID,
+		})
+		return
+	}
+	// Block-from-use safety net for deactivated models. The user has
+	// explicitly marked this model dormant in Settings → Models;
+	// surfacing it as a clear error (rather than silently loading it
+	// from disk and consuming RAM) is the whole point. Reactivation
+	// is one click in the same Settings panel.
+	if deactivated {
+		writeJSON(conn, JSONRPCResponse{
+			JSONRPC: "2.0",
+			Error: map[string]any{
+				"code": -32603,
+				"message": "Model \"" + modelName + "\" is deactivated. " +
+					"Reactivate it in Settings → Models, or point this agent at a different model.",
+			},
+			ID: req.ID,
 		})
 		return
 	}

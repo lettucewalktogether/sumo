@@ -956,3 +956,28 @@ func TestConfig_IsServerParallelSafe_UpdatesAfterHotReload(t *testing.T) {
 	cfg.UpdateFrom(src)
 	require.True(t, cfg.IsServerParallelSafe("trusted"))
 }
+
+// TestModelsConfig_IsDeactivated covers the v0.1.12 server-side
+// deactivate flag: bare model ids in the Deactivated list match
+// exactly (no prefix stripping inside the helper itself; callers
+// pass the bare name from llm.ParseProviderModel). Empty list and
+// nil receivers must report false so a fresh install behaves
+// like every model is allowed.
+func TestModelsConfig_IsDeactivated(t *testing.T) {
+	var zero ModelsConfig
+	require.False(t, zero.IsDeactivated("anything"),
+		"zero value must allow every model — fresh installs have no deactivated list")
+
+	cfg := ModelsConfig{Deactivated: []string{
+		"aisingapore/Gemma-SEA-LION-v4-27B-IT",
+		"qwen3.5:9b",
+	}}
+	require.True(t, cfg.IsDeactivated("aisingapore/Gemma-SEA-LION-v4-27B-IT"))
+	require.True(t, cfg.IsDeactivated("qwen3.5:9b"))
+	// Exact match — partial / case-changed names are NOT deactivated.
+	require.False(t, cfg.IsDeactivated("gemma4:latest"))
+	require.False(t, cfg.IsDeactivated("aisingapore/Gemma-SEA-LION-v4-27B-IT:latest"),
+		"tag suffix mismatch must not match — Ollama treats them as different models")
+	require.False(t, cfg.IsDeactivated("AISINGAPORE/GEMMA-SEA-LION-V4-27B-IT"),
+		"comparison is case-sensitive; Ollama tags are case-significant")
+}
